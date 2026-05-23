@@ -3,13 +3,24 @@ package com.gzzz.toimage
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.unit.dp
+import androidx.hilt.navigation.compose.hiltViewModel
+import coil.compose.rememberAsyncImagePainter
+import com.gzzz.toimage.ui.chat.ChatViewModel
 import com.gzzz.toimage.ui.navigation.AppNavigation
 import com.gzzz.toimage.ui.theme.ToimageTheme
 import dagger.hilt.android.AndroidEntryPoint
+import java.io.File
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
@@ -17,11 +28,26 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent {
             ToimageTheme {
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background
-                ) {
-                    AppNavigation()
+                val viewModel: ChatViewModel = hiltViewModel()
+                val backgroundPath by viewModel.backgroundPath.collectAsState()
+
+                Box(modifier = Modifier.fillMaxSize()) {
+                    // 全局背景层
+                    if (backgroundPath != null) {
+                        Image(
+                            painter = rememberAsyncImagePainter(model = File(backgroundPath!!)),
+                            contentDescription = null,
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop
+                        )
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(Color.Black.copy(alpha = 0.3f))
+                        )
+                    }
+
+                    AppNavigation(hasBackground = backgroundPath != null)
                 }
             }
         }

@@ -23,6 +23,20 @@ class SettingsRepository @Inject constructor(
     private val _currentProvider = MutableStateFlow(loadCurrentProvider())
     val currentProvider: StateFlow<ProviderConfig?> = _currentProvider.asStateFlow()
 
+    private val _backgroundPath = MutableStateFlow(
+        prefs.getString("chat_background_path", null)
+    )
+    val backgroundPath: StateFlow<String?> = _backgroundPath.asStateFlow()
+
+    fun setBackgroundPath(path: String?) {
+        if (path != null) {
+            prefs.edit().putString("chat_background_path", path).apply()
+        } else {
+            prefs.edit().remove("chat_background_path").apply()
+        }
+        _backgroundPath.value = path
+    }
+
     fun getProviderConfig(providerId: String): ProviderConfig? {
         val imgBaseUrl = secureStorage.getBaseUrl(providerId) ?: return null
         val imgApiKey = secureStorage.getApiKey(providerId) ?: return null

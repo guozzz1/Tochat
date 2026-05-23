@@ -61,6 +61,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -88,7 +89,8 @@ fun ChatScreen(
     onNavigateToSettings: () -> Unit,
     onNavigateToSession: (String) -> Unit,
     onNavigateToImageDetail: (String) -> Unit,
-    viewModel: ChatViewModel = hiltViewModel()
+    viewModel: ChatViewModel = hiltViewModel(),
+    hasBackground: Boolean = false
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val messages by viewModel.messages.collectAsState()
@@ -254,7 +256,9 @@ fun ChatScreen(
                         }
                     },
                     colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = MaterialTheme.colorScheme.surface
+                        containerColor = if (hasBackground)
+                            MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)
+                        else MaterialTheme.colorScheme.surface
                     )
                 )
             },
@@ -262,7 +266,11 @@ fun ChatScreen(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(MaterialTheme.colorScheme.surface)
+                        .background(
+                            if (hasBackground)
+                                MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)
+                            else MaterialTheme.colorScheme.surface
+                        )
                         .navigationBarsPadding()
                         .imePadding()
                 ) {
@@ -323,7 +331,9 @@ fun ChatScreen(
                     )
                 }
             },
-            containerColor = MaterialTheme.colorScheme.background
+            containerColor = if (hasBackground)
+                Color.Transparent
+            else MaterialTheme.colorScheme.background
         ) { paddingValues ->
             Box(
                 modifier = Modifier

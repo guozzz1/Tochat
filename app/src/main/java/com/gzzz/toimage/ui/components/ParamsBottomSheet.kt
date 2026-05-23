@@ -1,6 +1,10 @@
 package com.gzzz.toimage.ui.components
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -8,8 +12,9 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Slider
@@ -22,16 +27,26 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.gzzz.toimage.data.provider.Capabilities
 
 data class GenerationParams(
-    val size: String = "1024x1024",
+    val size: String = "auto",
     val steps: Int? = null,
     val seed: Long? = null,
     val cfgScale: Float? = null,
     val batchSize: Int = 1
+)
+
+data class AspectRatioOption(
+    val label: String,
+    val ratio: Float?,  // null means auto/智能
+    val size: String
 )
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
@@ -43,6 +58,16 @@ fun ParamsBottomSheet(
     onConfirm: (GenerationParams) -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState()
+
+    val aspectRatioOptions = listOf(
+        AspectRatioOption("智能", null, "auto"),
+        AspectRatioOption("1:1", 1f, "1024x1024"),
+        AspectRatioOption("3:4", 3f / 4f, "768x1024"),
+        AspectRatioOption("4:3", 4f / 3f, "1024x768"),
+        AspectRatioOption("9:16", 9f / 16f, "576x1024"),
+        AspectRatioOption("16:9", 16f / 9f, "1024x576")
+    )
+
     var selectedSize by remember { mutableStateOf(currentParams.size) }
     var steps by remember { mutableFloatStateOf(currentParams.steps?.toFloat() ?: 30f) }
     var seedText by remember { mutableStateOf(currentParams.seed?.toString() ?: "") }
@@ -67,21 +92,22 @@ fun ParamsBottomSheet(
 
             Spacer(modifier = Modifier.height(20.dp))
 
-            // 尺寸选择
+            // 比例选择
             Text(
-                text = "尺寸",
+                text = "比例",
                 style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(12.dp))
             FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                capabilities.supportedSizes.forEach { size ->
-                    FilterChip(
-                        selected = selectedSize == size,
-                        onClick = { selectedSize = size },
-                        label = { Text(size) }
+                aspectRatioOptions.forEach { option ->
+                    AspectRatioItem(
+                        option = option,
+                        isSelected = selectedSize == option.size,
+                        onClick = { selectedSize = option.size }
                     )
                 }
             }
@@ -162,5 +188,68 @@ fun ParamsBottomSheet(
                 Text("确认")
             }
         }
+    }
+}
+
+@Composable
+fun AspectRatioItem(
+    option: AspectRatioOption,
+    isSelected: Boolean,
+    onClick: () -> Unit
+) {
+    val borderColor = if (isSelected) {
+        MaterialTheme.colorScheme.primary
+    } else {
+        MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)
+    }
+
+    val backgroundColor = if (isSelected) {
+        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
+    } else {
+        MaterialTheme.colorScheme.surface
+    }
+
+    // 计算框的尺寸，保持合理大小
+    val boxWidth = 52.dp
+    val boxHeight = when (option.ratio) {
+        null -> boxWidth  // 智能模式用正方形
+        else -> {
+            val height = (boxWidth.value / option.ratio).dp
+            height.coerceIn(36.dp, 80.dp)
+        }
+    }
+
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier
+            .clickable(onClick = onClick)
+            .padding(4.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .width(boxWidth)
+                .height(boxHeight)
+                .clip(RoundedCornerShape(6.dp))
+                .border(2.dp, borderColor, RoundedCornerShape(6.dp))
+                .background(backgroundColor),
+            contentAlignment = Alignment.Center
+        ) {
+            if (option.ratio == null) {
+                Text(
+                    text = "AI",
+                    fontSize = 11.sp,
+                    color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(4.dp))
+
+        Text(
+            text = option.label,
+            fontSize = 11.sp,
+            color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
     }
 }

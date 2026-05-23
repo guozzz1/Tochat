@@ -64,7 +64,8 @@ import java.io.File
 fun ImageDetailScreen(
     imagePath: String,
     onNavigateBack: () -> Unit,
-    onReuseParams: ((String) -> Unit)? = null
+    onReuseParams: ((String) -> Unit)? = null,
+    hasBackground: Boolean = false
 ) {
     val context = LocalContext.current
     var scale by remember { mutableFloatStateOf(1f) }
@@ -82,11 +83,15 @@ fun ImageDetailScreen(
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f)
+                    containerColor = if (hasBackground)
+                        MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)
+                    else MaterialTheme.colorScheme.surface.copy(alpha = 0.9f)
                 )
             )
         },
-        containerColor = MaterialTheme.colorScheme.background
+        containerColor = if (hasBackground)
+            androidx.compose.ui.graphics.Color.Transparent
+        else MaterialTheme.colorScheme.background
     ) { paddingValues ->
         Box(
             modifier = Modifier

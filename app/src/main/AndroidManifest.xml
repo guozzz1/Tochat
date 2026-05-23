@@ -43,6 +43,10 @@
             android:name=".service.GenerationService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+
+        <activity
+            android:name="com.canhub.cropper.CropImageActivity"
+            android:theme="@style/Theme.AppCompat.Light" />
     </application>
 
 </manifest>

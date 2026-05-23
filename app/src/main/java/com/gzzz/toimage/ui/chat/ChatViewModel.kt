@@ -28,6 +28,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -61,22 +63,25 @@ class ChatViewModel @Inject constructor(
     private val _uiState = MutableStateFlow(ChatUiState())
     val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
 
+    val backgroundPath: StateFlow<String?> = settingsRepository.backgroundPath
+
     private val _toastMessage = MutableSharedFlow<String>()
     val toastMessage: SharedFlow<String> = _toastMessage.asSharedFlow()
 
     private var chatJob: Job? = null
 
     private val sessionId: String? = savedStateHandle["sessionId"]
+    private val _currentSessionId = MutableStateFlow(sessionId)
 
-    val messages: StateFlow<List<ChatMessageEntity>> = run {
-        val id = sessionId
-        if (id != null) {
-            historyRepository.observeMessages(id)
-                .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
-        } else {
-            MutableStateFlow(emptyList())
+    val messages: StateFlow<List<ChatMessageEntity>> = _currentSessionId
+        .flatMapLatest { id ->
+            if (id != null) {
+                historyRepository.observeMessages(id)
+            } else {
+                flowOf(emptyList())
+            }
         }
-    }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val sessions: StateFlow<List<ChatSessionEntity>> =
         historyRepository.observeSessions()
@@ -168,13 +173,24 @@ class ChatViewModel @Inject constructor(
         }
 
         val hasSourceImage = _uiState.value.sourceImagePath != null
-        val canChat = provider.capabilities.supportsTextChat && !hasSourceImage
+        val isImageRequest = hasSourceImage || isImageGenerationRequest(prompt)
+        val canChat = provider.capabilities.supportsTextChat && !isImageRequest
 
         if (canChat) {
             sendChat(prompt)
         } else {
             enqueueGeneration(prompt)
         }
+    }
+
+    private fun isImageGenerationRequest(prompt: String): Boolean {
+        val keywords = listOf(
+            "生成", "画", "绘制", "生成图", "生成图片", "生成图像", "画一张", "画个",
+            "画一只", "画一幅", "帮我画", "帮我生成", "画画", "出图",
+            "draw", "generate", "create image", "paint"
+        )
+        val lowerPrompt = prompt.lowercase()
+        return keywords.any { lowerPrompt.contains(it) }
     }
 
     private fun sendChat(prompt: String) {
@@ -190,6 +206,7 @@ class ChatViewModel @Inject constructor(
                     firstPrompt = prompt
                 )
                 currentSessionId = session.id
+                _currentSessionId.value = currentSessionId
                 _uiState.value = _uiState.value.copy(
                     currentSessionId = currentSessionId,
                     currentSession = session
@@ -222,7 +239,15 @@ class ChatViewModel @Inject constructor(
                         )
                         val msg = when (event.error) {
                             is com.gzzz.toimage.data.provider.GenerationError.NetworkUnavailable -> "网络不可用，请检查网络连接"
-                            is com.gzzz.toimage.data.provider.GenerationError.ApiError -> "请求失败：${(event.error as com.gzzz.toimage.data.provider.GenerationError.ApiError).message}"
+                            is com.gzzz.toimage.data.provider.GenerationError.ApiError -> {
+                                val error = event.error as com.gzzz.toimage.data.provider.GenerationError.ApiError
+                                when (error.code) {
+                                    503 -> "服务暂时不可用，请稍后重试"
+                                    429 -> "请求过于频繁，请稍后重试"
+                                    401, 403 -> "API Key 无效，请检查配置"
+                                    else -> "请求失败：${error.message}"
+                                }
+                            }
                             is com.gzzz.toimage.data.provider.GenerationError.Timeout -> "请求超时，请重试"
                             is com.gzzz.toimage.data.provider.GenerationError.ContentRejected -> "内容不合规，请修改"
                             else -> "对话失败：${event.error}"
@@ -247,6 +272,7 @@ class ChatViewModel @Inject constructor(
                     firstPrompt = prompt
                 )
                 currentSessionId = session.id
+                _currentSessionId.value = currentSessionId
                 _uiState.value = _uiState.value.copy(
                     currentSessionId = currentSessionId,
                     currentSession = session
@@ -260,8 +286,8 @@ class ChatViewModel @Inject constructor(
                 prompt = prompt,
                 size = _uiState.value.params.size,
                 providerId = config.id,
-                model = config.image.model,
-                apiKey = config.image.apiKey,
+                model = config.image.model.ifBlank { config.chat.model },
+                apiKey = config.image.apiKey.ifBlank { config.chat.apiKey },
                 sourceImagePath = _uiState.value.sourceImagePath
             )
 

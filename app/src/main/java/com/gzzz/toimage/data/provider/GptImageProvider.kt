@@ -69,7 +69,7 @@ class GptImageProvider @Inject constructor(
     }
 
     override val isConfigured: Boolean
-        get() = apiService != null && apiKey.isNotBlank()
+        get() = (apiService != null || chatApiService != null) && (apiKey.isNotBlank() || chatApiKey.isNotBlank())
 
     @Volatile
     private var currentCall: retrofit2.Call<*>? = null
@@ -80,26 +80,10 @@ class GptImageProvider @Inject constructor(
         this.chatModel = chat.model.trim().ifEmpty { "gpt-4o-mini" }
 
         val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
-        val imgClient = OkHttpClient.Builder()
-            .connectTimeout(30, TimeUnit.SECONDS)
-            .readTimeout(180, TimeUnit.SECONDS)
-            .writeTimeout(30, TimeUnit.SECONDS)
-            .addInterceptor(HttpLoggingInterceptor().apply {
-                level = HttpLoggingInterceptor.Level.BODY
-            })
-            .build()
 
-        val imgRetrofit = Retrofit.Builder()
-            .baseUrl(image.baseUrl.trimEnd('/') + "/")
-            .client(imgClient)
-            .addConverterFactory("application/json".toMediaType().let { json.asConverterFactory(it) })
-            .build()
-
-        apiService = imgRetrofit.create(ImageApiService::class.java)
-
-        val effectiveChatUrl = chat.baseUrl.ifBlank { image.baseUrl }
-        val chatClient = if (chat.baseUrl.isNotBlank()) {
-            OkHttpClient.Builder()
+        // 配置图片服务（仅当 URL 有效时）
+        if (image.baseUrl.isNotBlank() && (image.baseUrl.startsWith("http://") || image.baseUrl.startsWith("https://"))) {
+            val imgClient = OkHttpClient.Builder()
                 .connectTimeout(30, TimeUnit.SECONDS)
                 .readTimeout(180, TimeUnit.SECONDS)
                 .writeTimeout(30, TimeUnit.SECONDS)
@@ -107,17 +91,52 @@ class GptImageProvider @Inject constructor(
                     level = HttpLoggingInterceptor.Level.BODY
                 })
                 .build()
+
+            val imgRetrofit = Retrofit.Builder()
+                .baseUrl(image.baseUrl.trimEnd('/') + "/")
+                .client(imgClient)
+                .addConverterFactory("application/json".toMediaType().let { json.asConverterFactory(it) })
+                .build()
+
+            apiService = imgRetrofit.create(ImageApiService::class.java)
         } else {
-            imgClient
+            apiService = null
         }
 
-        val chatRetrofit = Retrofit.Builder()
-            .baseUrl(effectiveChatUrl.trimEnd('/') + "/")
-            .client(chatClient)
-            .addConverterFactory("application/json".toMediaType().let { json.asConverterFactory(it) })
-            .build()
+        val effectiveChatUrl = chat.baseUrl.ifBlank { image.baseUrl }
 
-        chatApiService = chatRetrofit.create(ChatApiService::class.java)
+        // 配置聊天服务（仅当 URL 有效时）
+        if (effectiveChatUrl.isNotBlank() && (effectiveChatUrl.startsWith("http://") || effectiveChatUrl.startsWith("https://"))) {
+            val chatClient = if (chat.baseUrl.isNotBlank()) {
+                OkHttpClient.Builder()
+                    .connectTimeout(30, TimeUnit.SECONDS)
+                    .readTimeout(180, TimeUnit.SECONDS)
+                    .writeTimeout(30, TimeUnit.SECONDS)
+                    .addInterceptor(HttpLoggingInterceptor().apply {
+                        level = HttpLoggingInterceptor.Level.BODY
+                    })
+                    .build()
+            } else {
+                OkHttpClient.Builder()
+                    .connectTimeout(30, TimeUnit.SECONDS)
+                    .readTimeout(180, TimeUnit.SECONDS)
+                    .writeTimeout(30, TimeUnit.SECONDS)
+                    .addInterceptor(HttpLoggingInterceptor().apply {
+                        level = HttpLoggingInterceptor.Level.BODY
+                    })
+                    .build()
+            }
+
+            val chatRetrofit = Retrofit.Builder()
+                .baseUrl(effectiveChatUrl.trimEnd('/') + "/")
+                .client(chatClient)
+                .addConverterFactory("application/json".toMediaType().let { json.asConverterFactory(it) })
+                .build()
+
+            chatApiService = chatRetrofit.create(ChatApiService::class.java)
+        } else {
+            chatApiService = null
+        }
     }
 
     override suspend fun generate(request: GenerationRequest): Flow<GenerationProgress> = flow {

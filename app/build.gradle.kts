@@ -110,4 +110,7 @@ dependencies {
 
     // Core
     implementation(libs.core.ktx)
+
+    // Image Cropper
+    implementation("com.vanniktech:android-image-cropper:4.6.0")
 }

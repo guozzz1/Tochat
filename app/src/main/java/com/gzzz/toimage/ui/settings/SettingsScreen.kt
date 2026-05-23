@@ -1,6 +1,14 @@
 package com.gzzz.toimage.ui.settings
 
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
+import com.canhub.cropper.CropImageContract
+import com.canhub.cropper.CropImageContractOptions
+import com.canhub.cropper.CropImageOptions
+import com.canhub.cropper.CropImageView
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -8,9 +16,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
@@ -51,12 +62,16 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 import androidx.hilt.navigation.compose.hiltViewModel
+import coil.compose.rememberAsyncImagePainter
+import com.gzzz.toimage.util.ImagePickerUtil
+import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     onNavigateBack: () -> Unit,
-    viewModel: SettingsViewModel = hiltViewModel()
+    viewModel: SettingsViewModel = hiltViewModel(),
+    hasBackground: Boolean = false
 ) {
     val coroutineScope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -76,6 +91,47 @@ fun SettingsScreen(
     var imageExpanded by remember { mutableStateOf(false) }
 
     var storageInfo by remember { mutableStateOf<com.gzzz.toimage.data.storage.StorageInfo?>(null) }
+
+    val backgroundPath by viewModel.backgroundPath.collectAsState()
+
+    // 裁剪 launcher
+    val cropLauncher = rememberLauncherForActivityResult(
+        contract = CropImageContract()
+    ) { result ->
+        if (result.isSuccessful) {
+            val uri = result.uriContent
+            if (uri != null) {
+                val path = ImagePickerUtil.processPickedImage(context, uri) { msg ->
+                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                }
+                if (path != null) {
+                    viewModel.setBackgroundPath(path)
+                }
+            }
+        } else {
+            Toast.makeText(context, "裁剪取消", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    // 选择图片 launcher
+    val bgPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        if (uri != null) {
+            // 启动裁剪
+            cropLauncher.launch(
+                CropImageContractOptions(
+                    uri = uri,
+                    cropImageOptions = CropImageOptions(
+                        guidelines = CropImageView.Guidelines.ON,
+                        aspectRatioX = 9,
+                        aspectRatioY = 16,
+                        outputCompressQuality = 85
+                    )
+                )
+            )
+        }
+    }
 
     val imageModels by viewModel.imageModels.collectAsState()
     val chatModels by viewModel.chatModels.collectAsState()
@@ -108,11 +164,15 @@ fun SettingsScreen(
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface
+                    containerColor = if (hasBackground)
+                        MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)
+                    else MaterialTheme.colorScheme.surface
                 )
             )
         },
-        containerColor = MaterialTheme.colorScheme.background
+        containerColor = if (hasBackground)
+            androidx.compose.ui.graphics.Color.Transparent
+        else MaterialTheme.colorScheme.background
     ) { paddingValues ->
         Column(
             modifier = Modifier
@@ -380,6 +440,77 @@ fun SettingsScreen(
                 enabled = chatBaseUrl.isNotBlank() && chatApiKey.isNotBlank()
             ) {
                 Text("保存配置")
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+            Divider()
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // 聊天背景
+            Text(
+                text = "聊天背景",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.primary
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surface
+                ),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        if (backgroundPath != null) {
+                            Image(
+                                painter = rememberAsyncImagePainter(model = File(backgroundPath!!)),
+                                contentDescription = "背景预览",
+                                modifier = Modifier
+                                    .size(56.dp)
+                                    .clip(RoundedCornerShape(8.dp)),
+                                contentScale = ContentScale.Crop
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                        }
+
+                        OutlinedButton(
+                            onClick = {
+                                bgPickerLauncher.launch(
+                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                )
+                            }
+                        ) {
+                            Text("选择背景")
+                        }
+
+                        Spacer(modifier = Modifier.width(8.dp))
+
+                        if (backgroundPath != null) {
+                            OutlinedButton(
+                                onClick = { viewModel.clearBackgroundPath() },
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    contentColor = MaterialTheme.colorScheme.error
+                                )
+                            ) {
+                                Text("恢复默认")
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Text(
+                        text = "选择后可裁剪合适区域，背景会自动调暗",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.height(24.dp))

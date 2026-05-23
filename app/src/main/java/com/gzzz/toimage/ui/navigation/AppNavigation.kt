@@ -21,7 +21,7 @@ object Routes {
 }
 
 @Composable
-fun AppNavigation() {
+fun AppNavigation(hasBackground: Boolean = false) {
     val navController = rememberNavController()
 
     NavHost(
@@ -43,7 +43,8 @@ fun AppNavigation() {
                 },
                 onNavigateToImageDetail = { imagePath ->
                     navController.navigate(Routes.imageDetail(imagePath))
-                }
+                },
+                hasBackground = hasBackground
             )
         }
 
@@ -66,13 +67,15 @@ fun AppNavigation() {
                 },
                 onNavigateToImageDetail = { imagePath ->
                     navController.navigate(Routes.imageDetail(imagePath))
-                }
+                },
+                hasBackground = hasBackground
             )
         }
 
         composable(Routes.SETTINGS) {
             SettingsScreen(
-                onNavigateBack = { navController.popBackStack() }
+                onNavigateBack = { navController.popBackStack() },
+                hasBackground = hasBackground
             )
         }
 
@@ -84,7 +87,8 @@ fun AppNavigation() {
             val imagePath = java.net.URLDecoder.decode(encodedPath, "UTF-8")
             ImageDetailScreen(
                 imagePath = imagePath,
-                onNavigateBack = { navController.popBackStack() }
+                onNavigateBack = { navController.popBackStack() },
+                hasBackground = hasBackground
             )
         }
     }

@@ -44,7 +44,17 @@ class SettingsViewModel @Inject constructor(
     private val _isLoadingChatModels = MutableStateFlow(false)
     val isLoadingChatModels: StateFlow<Boolean> = _isLoadingChatModels.asStateFlow()
 
+    val backgroundPath: StateFlow<String?> = settingsRepository.backgroundPath
+
     fun getCurrentConfig(): ProviderConfig? = settingsRepository.currentProvider.value
+
+    fun setBackgroundPath(path: String?) {
+        settingsRepository.setBackgroundPath(path)
+    }
+
+    fun clearBackgroundPath() {
+        settingsRepository.setBackgroundPath(null)
+    }
 
     fun saveProvider(
         imageConfig: ServiceConfig,
@@ -62,6 +72,7 @@ class SettingsViewModel @Inject constructor(
 
     fun fetchImageModels(baseUrl: String, apiKey: String) {
         if (baseUrl.isBlank() || apiKey.isBlank()) return
+        if (!baseUrl.startsWith("http://") && !baseUrl.startsWith("https://")) return
         viewModelScope.launch {
             _isLoadingImageModels.value = true
             val models = fetchModels(baseUrl, apiKey)
@@ -72,6 +83,7 @@ class SettingsViewModel @Inject constructor(
 
     fun fetchChatModels(baseUrl: String, apiKey: String) {
         if (baseUrl.isBlank() || apiKey.isBlank()) return
+        if (!baseUrl.startsWith("http://") && !baseUrl.startsWith("https://")) return
         viewModelScope.launch {
             _isLoadingChatModels.value = true
             val models = fetchModels(baseUrl, apiKey)
@@ -83,6 +95,11 @@ class SettingsViewModel @Inject constructor(
     private suspend fun fetchModels(baseUrl: String, apiKey: String): List<String> =
         withContext(Dispatchers.IO) {
             try {
+                // 校验 URL 格式
+                if (!baseUrl.startsWith("http://") && !baseUrl.startsWith("https://")) {
+                    return@withContext emptyList()
+                }
+
                 val json = Json { ignoreUnknownKeys = true }
                 val client = OkHttpClient.Builder()
                     .connectTimeout(10, TimeUnit.SECONDS)
