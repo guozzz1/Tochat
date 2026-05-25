@@ -45,6 +45,13 @@ class HistoryRepository @Inject constructor(
         sessionDao.update(session)
     }
 
+    suspend fun renameSession(sessionId: String, title: String): ChatSessionEntity? {
+        val session = sessionDao.getById(sessionId) ?: return null
+        val renamed = session.copy(title = title)
+        sessionDao.update(renamed)
+        return renamed
+    }
+
     suspend fun deleteSession(sessionId: String) {
         messageDao.deleteBySession(sessionId)
         sessionDao.deleteById(sessionId)

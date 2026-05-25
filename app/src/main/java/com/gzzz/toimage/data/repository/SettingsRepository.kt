@@ -2,6 +2,8 @@ package com.gzzz.toimage.data.repository
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.gzzz.toimage.data.local.ApiConfigDao
+import com.gzzz.toimage.data.local.ApiConfigEntity
 import com.gzzz.toimage.data.security.SecureStorage
 import com.gzzz.toimage.domain.model.ProviderConfig
 import com.gzzz.toimage.domain.model.ServiceConfig
@@ -9,13 +11,16 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
 class SettingsRepository @Inject constructor(
     @ApplicationContext private val context: Context,
-    private val secureStorage: SecureStorage
+    private val secureStorage: SecureStorage,
+    private val apiConfigDao: ApiConfigDao
 ) {
     private val prefs: SharedPreferences =
         context.getSharedPreferences("toimage_settings", Context.MODE_PRIVATE)
@@ -133,5 +138,65 @@ class SettingsRepository @Inject constructor(
         val ids = getSavedProviderIds().toMutableSet()
         ids.remove(id)
         prefs.edit().putStringSet("provider_ids", ids).apply()
+    }
+
+    // ===== 多模型配置管理 =====
+
+    fun observeApiConfigs(): kotlinx.coroutines.flow.Flow<List<ApiConfigEntity>> {
+        return apiConfigDao.observeAll()
+    }
+
+    fun observeApiConfigsByType(type: String): kotlinx.coroutines.flow.Flow<List<ApiConfigEntity>> {
+        return apiConfigDao.observeByType(type)
+    }
+
+    suspend fun getApiConfigs(): List<ApiConfigEntity> {
+        return apiConfigDao.getAll()
+    }
+
+    suspend fun getApiConfigsByType(type: String): List<ApiConfigEntity> {
+        return apiConfigDao.getByType(type)
+    }
+
+    suspend fun getApiConfigById(id: String): ApiConfigEntity? {
+        return apiConfigDao.getById(id)
+    }
+
+    suspend fun saveApiConfig(config: ApiConfigEntity) {
+        apiConfigDao.insert(config)
+    }
+
+    suspend fun deleteApiConfig(id: String) {
+        apiConfigDao.deleteById(id)
+        val current = getCurrentModel()
+        if (current.first == id) {
+            prefs.edit().remove("current_chat_config_id").remove("current_chat_model").apply()
+        }
+    }
+
+    fun saveCurrentModel(configId: String, model: String) {
+        prefs.edit()
+            .putString("current_chat_config_id", configId)
+            .putString("current_chat_model", model)
+            .apply()
+    }
+
+    fun getCurrentModel(): Pair<String?, String?> {
+        val configId = prefs.getString("current_chat_config_id", null)
+        val model = prefs.getString("current_chat_model", null)
+        return configId to model
+    }
+
+    fun saveCurrentImageModel(configId: String, model: String) {
+        prefs.edit()
+            .putString("current_image_config_id", configId)
+            .putString("current_image_model", model)
+            .apply()
+    }
+
+    fun getCurrentImageModel(): Pair<String?, String?> {
+        val configId = prefs.getString("current_image_config_id", null)
+        val model = prefs.getString("current_image_model", null)
+        return configId to model
     }
 }

@@ -19,8 +19,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Divider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -50,12 +52,48 @@ fun SessionDrawerContent(
     onSessionClick: (String) -> Unit,
     onNewSession: () -> Unit,
     onDeleteSession: (String) -> Unit,
+    onRenameSession: (String, String) -> Unit,
     onSettingsClick: () -> Unit
 ) {
     var searchQuery by remember { mutableStateOf("") }
+    var renamingSession by remember { mutableStateOf<ChatSessionEntity?>(null) }
+    var renameText by remember { mutableStateOf("") }
 
     val filteredSessions = if (searchQuery.isBlank()) sessions
     else sessions.filter { it.title.contains(searchQuery, ignoreCase = true) }
+
+    renamingSession?.let { session ->
+        val trimmedTitle = renameText.trim()
+        AlertDialog(
+            onDismissRequest = { renamingSession = null },
+            title = { Text("重命名会话") },
+            text = {
+                OutlinedTextField(
+                    value = renameText,
+                    onValueChange = { renameText = it },
+                    placeholder = { Text("输入新的会话标题") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = trimmedTitle.isNotEmpty() && trimmedTitle != session.title,
+                    onClick = {
+                        onRenameSession(session.id, renameText)
+                        renamingSession = null
+                    }
+                ) {
+                    Text("确定")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { renamingSession = null }) {
+                    Text("取消")
+                }
+            }
+        )
+    }
 
     Column(
         modifier = Modifier
@@ -121,6 +159,10 @@ fun SessionDrawerContent(
                         session = session,
                         isSelected = session.id == currentSessionId,
                         onClick = { onSessionClick(session.id) },
+                        onRename = {
+                            renamingSession = session
+                            renameText = session.title
+                        },
                         onDelete = { onDeleteSession(session.id) }
                     )
                 }
@@ -157,6 +199,7 @@ private fun SessionItem(
     session: ChatSessionEntity,
     isSelected: Boolean,
     onClick: () -> Unit,
+    onRename: () -> Unit,
     onDelete: () -> Unit
 ) {
     val bgColor = if (isSelected)
@@ -186,6 +229,18 @@ private fun SessionItem(
                 text = formatTime(session.updatedAt),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
+        IconButton(
+            onClick = onRename,
+            modifier = Modifier.size(32.dp)
+        ) {
+            Icon(
+                Icons.Default.Edit,
+                contentDescription = "重命名",
+                modifier = Modifier.size(16.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
 

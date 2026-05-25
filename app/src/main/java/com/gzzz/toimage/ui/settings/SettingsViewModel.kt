@@ -2,6 +2,8 @@ package com.gzzz.toimage.ui.settings
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.gzzz.toimage.data.local.ApiConfigEntity
+import com.gzzz.toimage.data.provider.PROVIDER_GPT_IMAGE
 import com.gzzz.toimage.data.remote.ModelsApiService
 import com.gzzz.toimage.data.repository.HistoryRepository
 import com.gzzz.toimage.data.repository.SettingsRepository
@@ -17,12 +19,15 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.decodeFromString
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFactory
 import java.util.concurrent.TimeUnit
+import java.util.UUID
 import javax.inject.Inject
 
 @HiltViewModel
@@ -44,7 +49,34 @@ class SettingsViewModel @Inject constructor(
     private val _isLoadingChatModels = MutableStateFlow(false)
     val isLoadingChatModels: StateFlow<Boolean> = _isLoadingChatModels.asStateFlow()
 
+    private val _apiConfigs = MutableStateFlow<List<ApiConfigEntity>>(emptyList())
+    val apiConfigs: StateFlow<List<ApiConfigEntity>> = _apiConfigs.asStateFlow()
+
+    private val _chatConfigs = MutableStateFlow<List<ApiConfigEntity>>(emptyList())
+    val chatConfigs: StateFlow<List<ApiConfigEntity>> = _chatConfigs.asStateFlow()
+
+    private val _imageConfigs = MutableStateFlow<List<ApiConfigEntity>>(emptyList())
+    val imageConfigs: StateFlow<List<ApiConfigEntity>> = _imageConfigs.asStateFlow()
+
     val backgroundPath: StateFlow<String?> = settingsRepository.backgroundPath
+
+    init {
+        viewModelScope.launch {
+            settingsRepository.observeApiConfigs().collect { configs ->
+                _apiConfigs.value = configs
+            }
+        }
+        viewModelScope.launch {
+            settingsRepository.observeApiConfigsByType("chat").collect { configs ->
+                _chatConfigs.value = configs
+            }
+        }
+        viewModelScope.launch {
+            settingsRepository.observeApiConfigsByType("image").collect { configs ->
+                _imageConfigs.value = configs
+            }
+        }
+    }
 
     fun getCurrentConfig(): ProviderConfig? = settingsRepository.currentProvider.value
 
@@ -57,13 +89,12 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun saveProvider(
-        imageConfig: ServiceConfig,
-        chatConfig: ServiceConfig
+        imageConfig: ServiceConfig
     ) {
         val config = ProviderConfig(
-            id = "gpt-image-2",
+            id = PROVIDER_GPT_IMAGE,
             image = imageConfig,
-            chat = chatConfig,
+            chat = ServiceConfig(displayName = "", baseUrl = "", apiKey = "", model = ""),
             isDefault = true
         )
         settingsRepository.saveProviderConfig(config)
@@ -135,6 +166,50 @@ class SettingsViewModel @Inject constructor(
     fun clearAllImages() {
         viewModelScope.launch {
             storageCleaner.clearAll()
+        }
+    }
+
+    // ===== 多配置管理 =====
+
+    suspend fun getApiConfigs(): List<ApiConfigEntity> {
+        return settingsRepository.getApiConfigs()
+    }
+
+    fun saveApiConfig(
+        id: String = UUID.randomUUID().toString(),
+        name: String,
+        baseUrl: String,
+        apiKey: String,
+        models: List<String>,
+        type: String = "chat",
+        providerId: String? = null
+    ) {
+        viewModelScope.launch {
+            val config = ApiConfigEntity(
+                id = id,
+                name = name,
+                baseUrl = baseUrl.trimEnd('/'),
+                apiKey = apiKey,
+                models = Json.encodeToString(models),
+                type = type,
+                providerId = providerId
+            )
+            settingsRepository.saveApiConfig(config)
+        }
+    }
+
+    fun deleteApiConfig(id: String) {
+        viewModelScope.launch {
+            settingsRepository.deleteApiConfig(id)
+        }
+    }
+
+    fun fetchModelsForConfig(baseUrl: String, apiKey: String, onResult: (List<String>) -> Unit) {
+        if (baseUrl.isBlank() || apiKey.isBlank()) return
+        if (!baseUrl.startsWith("http://") && !baseUrl.startsWith("https://")) return
+        viewModelScope.launch {
+            val models = fetchModels(baseUrl, apiKey)
+            onResult(models)
         }
     }
 }

@@ -74,6 +74,31 @@ class GptImageProvider @Inject constructor(
     @Volatile
     private var currentCall: retrofit2.Call<*>? = null
 
+    fun configureChat(baseUrl: String, apiKey: String, model: String) {
+        this.chatApiKey = apiKey
+        this.chatModel = model.trim().ifEmpty { "gpt-4o-mini" }
+
+        val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+        if (baseUrl.isNotBlank() && (baseUrl.startsWith("http://") || baseUrl.startsWith("https://"))) {
+            val chatClient = OkHttpClient.Builder()
+                .connectTimeout(30, TimeUnit.SECONDS)
+                .readTimeout(180, TimeUnit.SECONDS)
+                .writeTimeout(30, TimeUnit.SECONDS)
+                .addInterceptor(HttpLoggingInterceptor().apply {
+                    level = HttpLoggingInterceptor.Level.BASIC
+                })
+                .build()
+
+            val chatRetrofit = Retrofit.Builder()
+                .baseUrl(baseUrl.trimEnd('/') + "/")
+                .client(chatClient)
+                .addConverterFactory("application/json".toMediaType().let { json.asConverterFactory(it) })
+                .build()
+
+            chatApiService = chatRetrofit.create(ChatApiService::class.java)
+        }
+    }
+
     override fun configure(image: ServiceConfig, chat: ServiceConfig) {
         this.apiKey = image.apiKey
         this.chatApiKey = chat.apiKey.ifBlank { image.apiKey }

@@ -20,5 +20,6 @@ data class ChatMessageEntity(
     val paramsJson: String? = null,
     val status: String = "success",
     val errorMessage: String? = null,
-    val messageType: String = "image"
+    val messageType: String = "image",
+    val attachmentFileName: String? = null
 )

@@ -113,4 +113,7 @@ dependencies {
 
     // Image Cropper
     implementation("com.vanniktech:android-image-cropper:4.6.0")
+
+    // PDF text extraction
+    implementation("com.tom-roush:pdfbox-android:2.0.27.0")
 }

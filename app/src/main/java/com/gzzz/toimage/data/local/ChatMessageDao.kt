@@ -56,6 +56,9 @@ interface ChatMessageDao {
     @Query("SELECT * FROM chat_messages WHERE sessionId = :sessionId AND messageType = 'text' AND status = 'success' ORDER BY createdAt DESC LIMIT :limit")
     suspend fun getRecentTextMessages(sessionId: String, limit: Int): List<ChatMessageEntity>
 
+    @Query("SELECT * FROM chat_messages WHERE sessionId = :sessionId AND messageType IN ('text', 'roundtable') AND status = 'success' ORDER BY createdAt DESC LIMIT :limit")
+    suspend fun getRecentTextLikeMessages(sessionId: String, limit: Int): List<ChatMessageEntity>
+
     @Query("""
         SELECT * FROM chat_messages
         WHERE sessionId = :sessionId AND status = 'success' AND imageResultPath IS NOT NULL
@@ -75,13 +78,13 @@ interface ChatMessageDao {
 
     @Query("""
         UPDATE chat_messages SET status = :status, errorMessage = :errorMessage
-        WHERE sessionId = :sessionId AND messageType = 'text' AND status = 'running'
+        WHERE sessionId = :sessionId AND messageType IN ('text', 'roundtable') AND status = 'running'
     """)
     suspend fun markRunningTextAsStatus(sessionId: String, status: String, errorMessage: String?)
 
     @Query("""
         SELECT COUNT(*) FROM chat_messages
-        WHERE sessionId = :sessionId AND messageType = 'text' AND status = 'running'
+        WHERE sessionId = :sessionId AND messageType IN ('text', 'roundtable') AND status = 'running'
     """)
     suspend fun getRunningTextCount(sessionId: String): Int
 }

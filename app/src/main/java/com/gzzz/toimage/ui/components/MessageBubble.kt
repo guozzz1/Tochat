@@ -1,10 +1,6 @@
 package com.gzzz.toimage.ui.components
 
-import android.content.ClipData
-import android.content.ClipboardManager
-import android.content.Context
 import android.widget.TextView
-import android.widget.Toast
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -13,8 +9,6 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -29,9 +23,10 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -78,10 +73,10 @@ fun AiAvatar(modifier: Modifier = Modifier) {
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun UserMessageBubble(text: String) {
-    val context = LocalContext.current
+fun UserMessageBubble(text: String, attachmentFileName: String? = null) {
+    val textColor = MaterialTheme.colorScheme.onPrimary
+    val bgColor = MaterialTheme.colorScheme.primary
 
     Row(
         modifier = Modifier
@@ -93,23 +88,59 @@ fun UserMessageBubble(text: String) {
             modifier = Modifier.widthIn(max = 300.dp),
             horizontalAlignment = Alignment.End
         ) {
-            Text(
-                text = text,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onPrimary,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(16.dp, 4.dp, 16.dp, 16.dp))
-                    .background(MaterialTheme.colorScheme.primary)
-                    .combinedClickable(
-                        onClick = {},
-                        onLongClick = {
-                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                            clipboard.setPrimaryClip(ClipData.newPlainText("message", text))
-                            Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show()
-                        }
+            if (attachmentFileName != null) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(16.dp, 4.dp, 4.dp, 4.dp))
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.85f))
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Description,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                        tint = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.8f)
                     )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = attachmentFileName,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                Spacer(modifier = Modifier.height(2.dp))
+            }
+
+            Box(
+                modifier = Modifier
+                    .clip(
+                        if (attachmentFileName != null)
+                            RoundedCornerShape(4.dp, 4.dp, 16.dp, 16.dp)
+                        else
+                            RoundedCornerShape(16.dp, 4.dp, 16.dp, 16.dp)
+                    )
+                    .background(bgColor)
                     .padding(horizontal = 14.dp, vertical = 10.dp)
-            )
+            ) {
+                AndroidView(
+                    factory = { ctx ->
+                        TextView(ctx).apply {
+                            setText(text)
+                            setTextColor(textColor.toArgb())
+                            setPadding(0, 0, 0, 0)
+                            textSize = 14f
+                            setTextIsSelectable(true)
+                        }
+                    },
+                    update = { tv ->
+                        tv.text = text
+                        tv.setTextColor(textColor.toArgb())
+                    }
+                )
+            }
         }
 
         Spacer(modifier = Modifier.width(8.dp))
@@ -314,13 +345,11 @@ fun ErrorMessageBubble(
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun TextMessageBubble(
     text: String,
     isStreaming: Boolean = false
 ) {
-    val context = LocalContext.current
     val textColor = MaterialTheme.colorScheme.onSurfaceVariant
     val surfaceColor = MaterialTheme.colorScheme.surfaceVariant
 
@@ -355,16 +384,6 @@ fun TextMessageBubble(
                 .widthIn(max = 320.dp)
                 .clip(RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp))
                 .background(surfaceColor)
-                .combinedClickable(
-                    onClick = {},
-                    onLongClick = {
-                        if (text.isNotEmpty()) {
-                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                            clipboard.setPrimaryClip(ClipData.newPlainText("message", text))
-                            Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show()
-                        }
-                    }
-                )
                 .padding(horizontal = 14.dp, vertical = 10.dp)
         ) {
             if (text.isNotEmpty()) {
@@ -376,6 +395,7 @@ fun TextMessageBubble(
                             setTextColor(textColor.toArgb())
                             setPadding(0, 0, 0, 0)
                             textSize = 14f
+                            setTextIsSelectable(true)
                         }
                     },
                     update = { tv ->

@@ -2,6 +2,7 @@ package com.gzzz.toimage.di
 
 import android.content.Context
 import androidx.room.Room
+import com.gzzz.toimage.data.local.ApiConfigDao
 import com.gzzz.toimage.data.local.AppDatabase
 import com.gzzz.toimage.data.local.ChatMessageDao
 import com.gzzz.toimage.data.local.ChatSessionDao
@@ -24,7 +25,13 @@ object DatabaseModule {
             context,
             AppDatabase::class.java,
             "toimage.db"
-        ).addMigrations(AppDatabase.MIGRATION_2_3)
+        ).addMigrations(
+            AppDatabase.MIGRATION_2_3,
+            AppDatabase.MIGRATION_3_4,
+            AppDatabase.MIGRATION_4_5,
+            AppDatabase.MIGRATION_5_6,
+            AppDatabase.MIGRATION_6_7
+        )
          .fallbackToDestructiveMigration()
          .build()
     }
@@ -37,4 +44,7 @@ object DatabaseModule {
 
     @Provides
     fun providePromptTemplateDao(db: AppDatabase): PromptTemplateDao = db.promptTemplateDao()
+
+    @Provides
+    fun provideApiConfigDao(db: AppDatabase): ApiConfigDao = db.apiConfigDao()
 }

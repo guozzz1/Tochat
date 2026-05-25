@@ -3,6 +3,7 @@ package com.gzzz.toimage.ui.chat
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.gzzz.toimage.data.local.ApiConfigEntity
 import com.gzzz.toimage.data.local.ChatMessageEntity
 import com.gzzz.toimage.data.local.ChatSessionEntity
 import com.gzzz.toimage.data.network.ConnectivityObserver
@@ -12,13 +13,20 @@ import com.gzzz.toimage.data.provider.GenerationProgress
 import com.gzzz.toimage.data.provider.GptImageProvider
 import com.gzzz.toimage.data.provider.GrokProvider
 import com.gzzz.toimage.data.provider.ImageProviderRegistry
+import com.gzzz.toimage.data.provider.PROVIDER_GPT_IMAGE
+import com.gzzz.toimage.data.provider.effectiveImageProviderId
 import com.gzzz.toimage.data.repository.EnqueueError
 import com.gzzz.toimage.data.repository.GenerationRepository
 import com.gzzz.toimage.data.repository.HistoryRepository
+import com.gzzz.toimage.data.repository.RoundtableParticipant
+import com.gzzz.toimage.data.repository.RoundtableRunEvent
 import com.gzzz.toimage.data.repository.SettingsRepository
 import com.gzzz.toimage.domain.model.ProviderConfig
+import com.gzzz.toimage.domain.model.ServiceConfig
 import com.gzzz.toimage.ui.components.GenerationParams
+import com.gzzz.toimage.util.FileAttachment
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -36,7 +44,6 @@ import javax.inject.Inject
 
 data class ChatUiState(
     val isConnected: Boolean = true,
-    val isDrawerOpen: Boolean = false,
     val currentSessionId: String? = null,
     val currentSession: ChatSessionEntity? = null,
     val isGenerating: Boolean = false,
@@ -45,7 +52,17 @@ data class ChatUiState(
     val params: GenerationParams = GenerationParams(),
     val currentProviderConfig: ProviderConfig? = null,
     val currentCapabilities: Capabilities = Capabilities(),
-    val sourceImagePath: String? = null
+    val sourceImagePath: String? = null,
+    val currentChatConfigId: String? = null,
+    val currentChatModel: String? = null,
+    val currentImageConfigId: String? = null,
+    val currentImageModel: String? = null,
+    val fileAttachment: FileAttachment? = null,
+    val isImageMode: Boolean = false,
+    val imageHintVisible: Boolean = false,
+    val imageHintPrompt: String? = null,
+    val isRoundtableRunning: Boolean = false,
+    val roundtableStatusLabel: String? = null
 )
 
 @HiltViewModel
@@ -69,6 +86,7 @@ class ChatViewModel @Inject constructor(
     val toastMessage: SharedFlow<String> = _toastMessage.asSharedFlow()
 
     private var chatJob: Job? = null
+    private var roundtableJob: Job? = null
 
     private val sessionId: String? = savedStateHandle["sessionId"]
     private val _currentSessionId = MutableStateFlow(sessionId)
@@ -92,19 +110,59 @@ class ChatViewModel @Inject constructor(
         providerRegistry.register(gptImageProvider)
         providerRegistry.register(grokProvider)
 
-        // 配置所有已保存的 provider
+        // 配置所有已保存的 provider（用于生图）
         val allConfigs = settingsRepository.getAllProviderConfigs()
         for (config in allConfigs) {
             generationRepository.configureProvider(config)
         }
 
-        // 设置当前 provider
+        // 设置当前 provider（生图使用）
         val config = settingsRepository.currentProvider.value
         if (config != null) {
             val provider = providerRegistry.get(config.id)
             _uiState.value = _uiState.value.copy(
                 currentProviderConfig = config,
                 currentCapabilities = provider?.capabilities ?: Capabilities()
+            )
+        }
+
+        // 加载（或自动选择）当前对话模型
+        viewModelScope.launch {
+            val (savedConfigId, savedModel) = settingsRepository.getCurrentModel()
+            val apiConfigs = settingsRepository.getApiConfigs()
+
+            val (effectiveConfigId, effectiveModel) = pickActiveChatModel(savedConfigId, savedModel, apiConfigs)
+
+            if (effectiveConfigId != null && effectiveModel != null) {
+                if (effectiveConfigId != savedConfigId || effectiveModel != savedModel) {
+                    settingsRepository.saveCurrentModel(effectiveConfigId, effectiveModel)
+                }
+                applyChatConfigById(effectiveConfigId, effectiveModel)
+            }
+
+            _uiState.value = _uiState.value.copy(
+                currentChatConfigId = effectiveConfigId,
+                currentChatModel = effectiveModel
+            )
+        }
+
+        // 加载（或自动选择）当前生图模型
+        viewModelScope.launch {
+            val (savedConfigId, savedModel) = settingsRepository.getCurrentImageModel()
+            val imageConfigs = settingsRepository.getApiConfigsByType("image")
+
+            val (effectiveConfigId, effectiveModel) = pickActiveChatModel(savedConfigId, savedModel, imageConfigs)
+
+            if (effectiveConfigId != null && effectiveModel != null) {
+                if (effectiveConfigId != savedConfigId || effectiveModel != savedModel) {
+                    settingsRepository.saveCurrentImageModel(effectiveConfigId, effectiveModel)
+                }
+                applyImageConfigById(effectiveConfigId, effectiveModel)
+            }
+
+            _uiState.value = _uiState.value.copy(
+                currentImageConfigId = effectiveConfigId,
+                currentImageModel = effectiveModel
             )
         }
 
@@ -159,50 +217,125 @@ class ChatViewModel @Inject constructor(
     }
 
     fun sendMessage(prompt: String) {
-        val config = _uiState.value.currentProviderConfig
-        if (config == null) {
-            viewModelScope.launch { _toastMessage.emit("请先在设置中配置 API Key") }
-            return
-        }
         if (prompt.isBlank()) return
 
-        val provider = providerRegistry.get(config.id)
-        if (provider == null || !provider.isConfigured) {
-            viewModelScope.launch { _toastMessage.emit("当前服务未配置，请在设置中填写 API Key") }
-            return
+        dismissImageHint()
+
+        val hasFile = _uiState.value.fileAttachment != null
+        val hasSourceImage = _uiState.value.sourceImagePath != null
+
+        val isImageRequest = when {
+            hasFile -> false
+            _uiState.value.isImageMode -> true
+            hasSourceImage -> true
+            else -> false
         }
 
-        val hasSourceImage = _uiState.value.sourceImagePath != null
-        val isImageRequest = hasSourceImage || isImageGenerationRequest(prompt)
-        val canChat = provider.capabilities.supportsTextChat && !isImageRequest
-
-        if (canChat) {
-            sendChat(prompt)
-        } else {
+        if (isImageRequest) {
             enqueueGeneration(prompt)
+            if (_uiState.value.isImageMode) exitImageMode()
+        } else {
+            if (!hasFile && detectImageIntent(prompt)) {
+                _uiState.value = _uiState.value.copy(
+                    imageHintVisible = true,
+                    imageHintPrompt = prompt
+                )
+            } else {
+                sendChat(prompt)
+            }
         }
     }
 
-    private fun isImageGenerationRequest(prompt: String): Boolean {
-        val keywords = listOf(
-            "生成", "画", "绘制", "生成图", "生成图片", "生成图像", "画一张", "画个",
-            "画一只", "画一幅", "帮我画", "帮我生成", "画画", "出图",
-            "draw", "generate", "create image", "paint"
+    fun confirmImageHint() {
+        val prompt = _uiState.value.imageHintPrompt ?: return
+        dismissImageHint()
+        enqueueGeneration(prompt)
+    }
+
+    fun dismissImageHintAndSendChat() {
+        val prompt = _uiState.value.imageHintPrompt ?: return
+        dismissImageHint()
+        sendChat(prompt)
+    }
+
+    fun dismissImageHint() {
+        _uiState.value = _uiState.value.copy(
+            imageHintVisible = false,
+            imageHintPrompt = null
         )
-        val lowerPrompt = prompt.lowercase()
-        return keywords.any { lowerPrompt.contains(it) }
+    }
+
+    fun enterImageMode() {
+        _uiState.value = _uiState.value.copy(isImageMode = true)
+    }
+
+    fun exitImageMode() {
+        _uiState.value = _uiState.value.copy(isImageMode = false)
+    }
+
+    private fun detectImageIntent(prompt: String): Boolean {
+        val blacklist = listOf(
+            "画法", "画风", "画作", "画家", "画笔", "画布", "画面",
+            "怎么画", "如何画", "画.*的方法", "画.*的技巧",
+            "描述", "解释", "介绍", "分析", "总结",
+            "生成.*表格", "生成.*代码", "生成.*文档", "生成.*脚本",
+            "生成.*列表", "生成.*报告", "生成.*方案", "生成.*计划"
+        )
+        for (pattern in blacklist) {
+            if (Regex(pattern).containsMatchIn(prompt)) return false
+        }
+
+        val whitelist = listOf(
+            "画一[只个张幅副]",
+            "画[一]?.*的(图|画像|海报|插画|头像|壁纸|照片)",
+            "生成.*图(片|像)?$",
+            "生成一[张幅副]",
+            "帮我画",
+            "帮我生成.*图",
+            "出[一张幅].*图",
+            "^画.{1,8}$"
+        )
+        for (pattern in whitelist) {
+            if (Regex(pattern).containsMatchIn(prompt)) return true
+        }
+
+        return false
     }
 
     private fun sendChat(prompt: String) {
-        val config = _uiState.value.currentProviderConfig ?: return
-
         chatJob = viewModelScope.launch {
+            val configId = _uiState.value.currentChatConfigId
+            val model = _uiState.value.currentChatModel
+
+            if (configId == null || model == null) {
+                _toastMessage.emit("请先在设置中添加配置并选择模型")
+                return@launch
+            }
+
+            val apiConfig = settingsRepository.getApiConfigById(configId)
+            if (apiConfig == null) {
+                _toastMessage.emit("当前配置已被删除，请重新选择模型")
+                return@launch
+            }
+
+            val attachment = _uiState.value.fileAttachment
+            val attachmentFileName = attachment?.fileName
+            val finalPrompt = if (attachment != null) {
+                val truncNote = if (attachment.isTruncated)
+                    "（注：文件过长，已截取前${attachment.text.length}字）\n" else ""
+                "[附件: ${attachment.fileName}]\n$truncNote${attachment.text}\n\n用户消息: $prompt"
+            } else prompt
+            _uiState.value = _uiState.value.copy(fileAttachment = null)
+
+            // 应用对话配置到 provider
+            gptImageProvider.configureChat(apiConfig.baseUrl, apiConfig.apiKey, model)
+
             var currentSessionId = _uiState.value.currentSessionId
 
             if (currentSessionId == null) {
                 val session = historyRepository.createSession(
-                    providerId = config.id,
-                    model = config.chat.model,
+                    providerId = PROVIDER_GPT_IMAGE,
+                    model = model,
                     firstPrompt = prompt
                 )
                 currentSessionId = session.id
@@ -217,10 +350,12 @@ class ChatViewModel @Inject constructor(
 
             generationRepository.sendChat(
                 sessionId = currentSessionId,
-                userText = prompt,
-                providerId = config.id,
-                model = config.chat.model,
-                apiKey = config.chat.apiKey.ifBlank { config.image.apiKey }
+                userText = finalPrompt,
+                displayText = prompt,
+                attachmentFileName = attachmentFileName,
+                providerId = PROVIDER_GPT_IMAGE,
+                model = model,
+                apiKey = apiConfig.apiKey
             ).collect { event ->
                 when (event) {
                     is ChatStreamEvent.Delta -> {}
@@ -260,15 +395,30 @@ class ChatViewModel @Inject constructor(
     }
 
     private fun enqueueGeneration(prompt: String) {
-        val config = _uiState.value.currentProviderConfig ?: return
+        val configId = _uiState.value.currentImageConfigId
+        val model = _uiState.value.currentImageModel
+
+        if (configId == null || model == null) {
+            viewModelScope.launch { _toastMessage.emit("请先选择生图模型") }
+            return
+        }
 
         viewModelScope.launch {
+            val apiConfig = settingsRepository.getApiConfigById(configId)
+            if (apiConfig == null) {
+                _toastMessage.emit("当前生图配置已被删除，请重新选择")
+                return@launch
+            }
+
+            val providerId = apiConfig.effectiveImageProviderId()
+            applyImageConfig(apiConfig, model)
+
             var currentSessionId = _uiState.value.currentSessionId
 
             if (currentSessionId == null) {
                 val session = historyRepository.createSession(
-                    providerId = config.id,
-                    model = config.image.model,
+                    providerId = providerId,
+                    model = model,
                     firstPrompt = prompt
                 )
                 currentSessionId = session.id
@@ -285,9 +435,9 @@ class ChatViewModel @Inject constructor(
                 sessionId = currentSessionId,
                 prompt = prompt,
                 size = _uiState.value.params.size,
-                providerId = config.id,
-                model = config.image.model.ifBlank { config.chat.model },
-                apiKey = config.image.apiKey.ifBlank { config.chat.apiKey },
+                providerId = providerId,
+                model = model,
+                apiKey = apiConfig.apiKey,
                 sourceImagePath = _uiState.value.sourceImagePath
             )
 
@@ -305,19 +455,109 @@ class ChatViewModel @Inject constructor(
         }
     }
 
+    fun startRoundtable(prompt: String, participants: List<RoundtableParticipant>, maxRounds: Int) {
+        if (prompt.isBlank()) return
+        if (_uiState.value.isImageMode || _uiState.value.sourceImagePath != null) {
+            viewModelScope.launch { _toastMessage.emit("圆桌讨论暂只支持文本，请先退出生图模式") }
+            return
+        }
+        if (participants.size !in 2..4) {
+            viewModelScope.launch { _toastMessage.emit("请选择 2-4 个对话模型") }
+            return
+        }
+
+        roundtableJob = viewModelScope.launch {
+            val attachment = _uiState.value.fileAttachment
+            val attachmentFileName = attachment?.fileName
+            val finalPrompt = if (attachment != null) {
+                val truncNote = if (attachment.isTruncated)
+                    "（注：文件过长，已截取前${attachment.text.length}字）\n" else ""
+                "[附件: ${attachment.fileName}]\n$truncNote${attachment.text}\n\n用户消息: $prompt"
+            } else prompt
+            _uiState.value = _uiState.value.copy(fileAttachment = null)
+
+            var currentSessionId = _uiState.value.currentSessionId
+            if (currentSessionId == null) {
+                val session = historyRepository.createSession(
+                    providerId = "roundtable",
+                    model = participants.joinToString(",") { it.model },
+                    firstPrompt = prompt
+                )
+                currentSessionId = session.id
+                _currentSessionId.value = currentSessionId
+                _uiState.value = _uiState.value.copy(
+                    currentSessionId = currentSessionId,
+                    currentSession = session
+                )
+            }
+
+            _uiState.value = _uiState.value.copy(
+                isGenerating = true,
+                isStreaming = true,
+                isRoundtableRunning = true,
+                roundtableStatusLabel = "圆桌讨论开始"
+            )
+
+            try {
+                generationRepository.sendRoundtable(
+                    sessionId = currentSessionId,
+                    userText = finalPrompt,
+                    displayText = prompt,
+                    attachmentFileName = attachmentFileName,
+                    participants = participants,
+                    maxRounds = maxRounds
+                ).collect { event ->
+                    when (event) {
+                        RoundtableRunEvent.Started -> {
+                            _uiState.value = _uiState.value.copy(roundtableStatusLabel = "圆桌讨论开始")
+                        }
+                        is RoundtableRunEvent.TurnStarted -> {
+                            _uiState.value = _uiState.value.copy(
+                                roundtableStatusLabel = "第 ${event.round} 轮：${event.participant.configName} 思考中"
+                            )
+                        }
+                        is RoundtableRunEvent.TurnCompleted -> {
+                            _uiState.value = _uiState.value.copy(
+                                roundtableStatusLabel = "第 ${event.round} 轮：${event.participant.configName} 已完成"
+                            )
+                        }
+                        is RoundtableRunEvent.SummaryStarted -> {
+                            _uiState.value = _uiState.value.copy(roundtableStatusLabel = "Leader 正在总结")
+                        }
+                        RoundtableRunEvent.Completed -> {
+                            _uiState.value = _uiState.value.copy(roundtableStatusLabel = "圆桌讨论完成")
+                        }
+                        is RoundtableRunEvent.Error -> {
+                            _toastMessage.emit(event.message)
+                        }
+                    }
+                }
+            } catch (e: CancellationException) {
+                _toastMessage.emit("圆桌讨论已停止")
+            } finally {
+                _uiState.value = _uiState.value.copy(
+                    isGenerating = false,
+                    isStreaming = false,
+                    isRoundtableRunning = false,
+                    roundtableStatusLabel = null
+                )
+                roundtableJob = null
+            }
+        }
+    }
+
     fun cancelGeneration() {
         generationRepository.cancel()
         chatJob?.cancel()
         chatJob = null
-        _uiState.value = _uiState.value.copy(isGenerating = false, isStreaming = false)
-    }
-
-    fun toggleDrawer() {
-        _uiState.value = _uiState.value.copy(isDrawerOpen = !_uiState.value.isDrawerOpen)
-    }
-
-    fun closeDrawer() {
-        _uiState.value = _uiState.value.copy(isDrawerOpen = false)
+        roundtableJob?.cancel()
+        roundtableJob = null
+        _uiState.value = _uiState.value.copy(
+            isGenerating = false,
+            isStreaming = false,
+            isRoundtableRunning = false,
+            roundtableStatusLabel = null
+        )
     }
 
     fun updateParams(params: GenerationParams) {
@@ -336,6 +576,26 @@ class ChatViewModel @Inject constructor(
         }
     }
 
+    fun renameSession(sessionId: String, newTitle: String) {
+        val title = newTitle.trim()
+        viewModelScope.launch {
+            if (title.isBlank()) {
+                _toastMessage.emit("标题不能为空")
+                return@launch
+            }
+
+            val renamed = historyRepository.renameSession(sessionId, title)
+            if (renamed == null) {
+                _toastMessage.emit("会话不存在")
+                return@launch
+            }
+
+            if (_uiState.value.currentSessionId == sessionId) {
+                _uiState.value = _uiState.value.copy(currentSession = renamed)
+            }
+        }
+    }
+
     fun newSession() {
         _uiState.value = _uiState.value.copy(
             currentSessionId = null,
@@ -344,10 +604,10 @@ class ChatViewModel @Inject constructor(
     }
 
     suspend fun createNewSession(): String? {
-        val config = _uiState.value.currentProviderConfig ?: return null
+        val model = _uiState.value.currentChatModel ?: "chat"
         val session = historyRepository.createSession(
-            providerId = config.id,
-            model = config.chat.model,
+            providerId = PROVIDER_GPT_IMAGE,
+            model = model,
             firstPrompt = "新对话"
         )
         _uiState.value = _uiState.value.copy(
@@ -363,5 +623,91 @@ class ChatViewModel @Inject constructor(
 
     fun clearSourceImage() {
         _uiState.value = _uiState.value.copy(sourceImagePath = null)
+    }
+
+    fun setFileAttachment(attachment: FileAttachment) {
+        _uiState.value = _uiState.value.copy(fileAttachment = attachment)
+    }
+
+    fun clearFileAttachment() {
+        _uiState.value = _uiState.value.copy(fileAttachment = null)
+    }
+
+    fun switchChatModel(configId: String, model: String) {
+        settingsRepository.saveCurrentModel(configId, model)
+        _uiState.value = _uiState.value.copy(
+            currentChatConfigId = configId,
+            currentChatModel = model
+        )
+        viewModelScope.launch {
+            applyChatConfigById(configId, model)
+        }
+    }
+
+    fun switchImageModel(configId: String, model: String) {
+        settingsRepository.saveCurrentImageModel(configId, model)
+        _uiState.value = _uiState.value.copy(
+            currentImageConfigId = configId,
+            currentImageModel = model
+        )
+        viewModelScope.launch {
+            applyImageConfigById(configId, model)
+        }
+    }
+
+    suspend fun getAllApiConfigs(): List<com.gzzz.toimage.data.local.ApiConfigEntity> {
+        return settingsRepository.getApiConfigs()
+    }
+
+    suspend fun getChatApiConfigs(): List<com.gzzz.toimage.data.local.ApiConfigEntity> {
+        return settingsRepository.getApiConfigsByType("chat")
+    }
+
+    suspend fun getImageApiConfigs(): List<com.gzzz.toimage.data.local.ApiConfigEntity> {
+        return settingsRepository.getApiConfigsByType("image")
+    }
+
+    private suspend fun applyChatConfigById(configId: String, model: String) {
+        val apiConfig = settingsRepository.getApiConfigById(configId) ?: return
+        gptImageProvider.configureChat(apiConfig.baseUrl, apiConfig.apiKey, model)
+    }
+
+    private suspend fun applyImageConfigById(configId: String, model: String) {
+        val apiConfig = settingsRepository.getApiConfigById(configId) ?: return
+        applyImageConfig(apiConfig, model)
+    }
+
+    private fun applyImageConfig(apiConfig: ApiConfigEntity, model: String) {
+        val providerId = apiConfig.effectiveImageProviderId()
+        val provider = providerRegistry.get(providerId) ?: return
+        provider.configure(
+            image = ServiceConfig(
+                displayName = apiConfig.name,
+                baseUrl = apiConfig.baseUrl,
+                apiKey = apiConfig.apiKey,
+                model = model
+            ),
+            chat = ServiceConfig()
+        )
+        _uiState.value = _uiState.value.copy(currentCapabilities = provider.capabilities)
+    }
+
+    private fun pickActiveChatModel(
+        savedConfigId: String?,
+        savedModel: String?,
+        apiConfigs: List<com.gzzz.toimage.data.local.ApiConfigEntity>
+    ): Pair<String?, String?> {
+        if (savedConfigId != null && savedModel != null) {
+            val exists = apiConfigs.any { it.id == savedConfigId }
+            if (exists) return savedConfigId to savedModel
+        }
+        val firstConfig = apiConfigs.firstOrNull() ?: return null to null
+        val models = try {
+            kotlinx.serialization.json.Json.decodeFromString<List<String>>(firstConfig.models)
+        } catch (e: Exception) {
+            emptyList()
+        }
+        val firstModel = models.firstOrNull() ?: return null to null
+        return firstConfig.id to firstModel
     }
 }

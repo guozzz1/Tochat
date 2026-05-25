@@ -9,6 +9,7 @@ import com.canhub.cropper.CropImageContractOptions
 import com.canhub.cropper.CropImageOptions
 import com.canhub.cropper.CropImageView
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -24,26 +25,21 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material3.Button
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Divider
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExposedDropdownMenuBox
-import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextField
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -57,13 +53,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 import androidx.hilt.navigation.compose.hiltViewModel
 import coil.compose.rememberAsyncImagePainter
+import com.gzzz.toimage.data.local.ApiConfigEntity
+import com.gzzz.toimage.data.provider.imageProviderDisplayName
 import com.gzzz.toimage.util.ImagePickerUtil
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.decodeFromString
 import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -75,20 +73,6 @@ fun SettingsScreen(
 ) {
     val coroutineScope = rememberCoroutineScope()
     val context = LocalContext.current
-
-    // 对话配置状态（必填）
-    var chatDisplayName by remember { mutableStateOf("") }
-    var chatBaseUrl by remember { mutableStateOf("") }
-    var chatApiKey by remember { mutableStateOf("") }
-    var chatModel by remember { mutableStateOf("") }
-    var chatExpanded by remember { mutableStateOf(false) }
-
-    // 生图配置状态（可选）
-    var imageDisplayName by remember { mutableStateOf("") }
-    var imageBaseUrl by remember { mutableStateOf("") }
-    var imageApiKey by remember { mutableStateOf("") }
-    var imageModel by remember { mutableStateOf("") }
-    var imageExpanded by remember { mutableStateOf(false) }
 
     var storageInfo by remember { mutableStateOf<com.gzzz.toimage.data.storage.StorageInfo?>(null) }
 
@@ -133,24 +117,46 @@ fun SettingsScreen(
         }
     }
 
-    val imageModels by viewModel.imageModels.collectAsState()
-    val chatModels by viewModel.chatModels.collectAsState()
-    val isLoadingImageModels by viewModel.isLoadingImageModels.collectAsState()
-    val isLoadingChatModels by viewModel.isLoadingChatModels.collectAsState()
+    val chatConfigs by viewModel.chatConfigs.collectAsState()
+    val imageConfigs by viewModel.imageConfigs.collectAsState()
 
-    // 加载现有配置
+    var showEditDialog by remember { mutableStateOf(false) }
+    var editingConfig by remember { mutableStateOf<ApiConfigEntity?>(null) }
+    var editingType by remember { mutableStateOf("chat") }
+
+    if (showEditDialog) {
+        ApiConfigEditDialog(
+            initialId = editingConfig?.id,
+            initialName = editingConfig?.name ?: "",
+            initialBaseUrl = editingConfig?.baseUrl ?: "",
+            initialApiKey = editingConfig?.apiKey ?: "",
+            initialModels = editingConfig?.models?.let {
+                try {
+                    Json.decodeFromString<List<String>>(it)
+                } catch (e: Exception) {
+                    emptyList()
+                }
+            } ?: emptyList(),
+            configType = editingType,
+            initialProviderId = editingConfig?.providerId,
+            onDismiss = {
+                showEditDialog = false
+                editingConfig = null
+            },
+            onConfirm = { id, name, baseUrl, apiKey, models, providerId ->
+                viewModel.saveApiConfig(id, name, baseUrl, apiKey, models, editingType, providerId)
+                showEditDialog = false
+                editingConfig = null
+                Toast.makeText(context, "配置已保存", Toast.LENGTH_SHORT).show()
+            },
+            onRefreshModels = { url, key, callback ->
+                viewModel.fetchModelsForConfig(url, key, callback)
+            }
+        )
+    }
+
+    // 加载存储信息
     LaunchedEffect(Unit) {
-        val config = viewModel.getCurrentConfig()
-        if (config != null) {
-            chatDisplayName = config.chat.displayName
-            chatBaseUrl = config.chat.baseUrl
-            chatApiKey = config.chat.apiKey
-            chatModel = config.chat.model
-            imageDisplayName = config.image.displayName
-            imageBaseUrl = config.image.baseUrl
-            imageApiKey = config.image.apiKey
-            imageModel = config.image.model
-        }
         storageInfo = viewModel.getStorageInfo()
     }
 
@@ -190,256 +196,141 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surface
-                ),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    OutlinedTextField(
-                        value = chatDisplayName,
-                        onValueChange = { chatDisplayName = it },
-                        label = { Text("渠道名称") },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true
-                    )
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    OutlinedTextField(
-                        value = chatBaseUrl,
-                        onValueChange = { chatBaseUrl = it },
-                        label = { Text("Base URL") },
-                        placeholder = { Text("https://api.example.com") },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true
-                    )
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    OutlinedTextField(
-                        value = chatApiKey,
-                        onValueChange = { chatApiKey = it },
-                        label = { Text("API Key") },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        visualTransformation = PasswordVisualTransformation()
-                    )
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    // 模型选择下拉 + 刷新按钮
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
+            // 配置列表
+            if (chatConfigs.isEmpty()) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant
+                    ),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        ExposedDropdownMenuBox(
-                            expanded = chatExpanded && chatModels.isNotEmpty(),
-                            onExpandedChange = { chatExpanded = it },
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            TextField(
-                                value = chatModel,
-                                onValueChange = { chatModel = it },
-                                label = { Text("对话模型") },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .menuAnchor(),
-                                singleLine = true,
-                                readOnly = false,
-                                trailingIcon = {
-                                    ExposedDropdownMenuDefaults.TrailingIcon(expanded = chatExpanded && chatModels.isNotEmpty())
-                                },
-                                colors = ExposedDropdownMenuDefaults.textFieldColors()
-                            )
-
-                            ExposedDropdownMenu(
-                                expanded = chatExpanded && chatModels.isNotEmpty(),
-                                onDismissRequest = { chatExpanded = false }
-                            ) {
-                                chatModels.forEach { modelId ->
-                                    DropdownMenuItem(
-                                        text = { Text(modelId, fontSize = 14.sp) },
-                                        onClick = {
-                                            chatModel = modelId
-                                            chatExpanded = false
-                                        }
-                                    )
-                                }
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.width(8.dp))
-
-                        IconButton(
-                            onClick = {
-                                viewModel.fetchChatModels(chatBaseUrl, chatApiKey)
-                            },
-                            enabled = chatBaseUrl.isNotBlank() && chatApiKey.isNotBlank() && !isLoadingChatModels
-                        ) {
-                            if (isLoadingChatModels) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.padding(4.dp),
-                                    strokeWidth = 2.dp
-                                )
-                            } else {
-                                Icon(
-                                    Icons.Default.Refresh,
-                                    contentDescription = "加载模型列表",
-                                    tint = MaterialTheme.colorScheme.primary
-                                )
-                            }
-                        }
+                        Text(
+                            text = "还没有配置",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "点击下方按钮添加第一个配置",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                 }
+            } else {
+                chatConfigs.forEach { config ->
+                    ApiConfigCard(
+                        config = config,
+                        onEdit = {
+                            editingConfig = config
+                            editingType = "chat"
+                            showEditDialog = true
+                        },
+                        onDelete = {
+                            viewModel.deleteApiConfig(config.id)
+                            Toast.makeText(context, "配置已删除", Toast.LENGTH_SHORT).show()
+                        }
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // 添加配置按钮
+            OutlinedButton(
+                onClick = {
+                    editingConfig = null
+                    editingType = "chat"
+                    showEditDialog = true
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(Icons.Default.Add, contentDescription = null)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("添加对话配置")
             }
 
             Spacer(modifier = Modifier.height(24.dp))
             Divider()
             Spacer(modifier = Modifier.height(24.dp))
 
-            // 生图配置（可选）
+            // 生图配置
             Text(
-                text = "生图配置（可选）",
+                text = "生图配置",
                 style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = MaterialTheme.colorScheme.secondary
             )
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surface
-                ),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    OutlinedTextField(
-                        value = imageDisplayName,
-                        onValueChange = { imageDisplayName = it },
-                        label = { Text("渠道名称") },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true
-                    )
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    OutlinedTextField(
-                        value = imageBaseUrl,
-                        onValueChange = { imageBaseUrl = it },
-                        label = { Text("Base URL") },
-                        placeholder = { Text("https://api.example.com") },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true
-                    )
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    OutlinedTextField(
-                        value = imageApiKey,
-                        onValueChange = { imageApiKey = it },
-                        label = { Text("API Key") },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        visualTransformation = PasswordVisualTransformation()
-                    )
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    // 模型选择下拉 + 刷新按钮
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
+            // 生图配置列表
+            if (imageConfigs.isEmpty()) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant
+                    ),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        ExposedDropdownMenuBox(
-                            expanded = imageExpanded && imageModels.isNotEmpty(),
-                            onExpandedChange = { imageExpanded = it },
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            TextField(
-                                value = imageModel,
-                                onValueChange = { imageModel = it },
-                                label = { Text("生图模型") },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .menuAnchor(),
-                                singleLine = true,
-                                readOnly = false,
-                                trailingIcon = {
-                                    ExposedDropdownMenuDefaults.TrailingIcon(expanded = imageExpanded && imageModels.isNotEmpty())
-                                },
-                                colors = ExposedDropdownMenuDefaults.textFieldColors()
-                            )
-
-                            ExposedDropdownMenu(
-                                expanded = imageExpanded && imageModels.isNotEmpty(),
-                                onDismissRequest = { imageExpanded = false }
-                            ) {
-                                imageModels.forEach { modelId ->
-                                    DropdownMenuItem(
-                                        text = { Text(modelId, fontSize = 14.sp) },
-                                        onClick = {
-                                            imageModel = modelId
-                                            imageExpanded = false
-                                        }
-                                    )
-                                }
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.width(8.dp))
-
-                        IconButton(
-                            onClick = {
-                                viewModel.fetchImageModels(imageBaseUrl, imageApiKey)
-                            },
-                            enabled = imageBaseUrl.isNotBlank() && imageApiKey.isNotBlank() && !isLoadingImageModels
-                        ) {
-                            if (isLoadingImageModels) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.padding(4.dp),
-                                    strokeWidth = 2.dp
-                                )
-                            } else {
-                                Icon(
-                                    Icons.Default.Refresh,
-                                    contentDescription = "加载模型列表",
-                                    tint = MaterialTheme.colorScheme.primary
-                                )
-                            }
-                        }
+                        Text(
+                            text = "还没有生图配置",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "点击下方按钮添加生图配置",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
+                }
+            } else {
+                imageConfigs.forEach { config ->
+                    ApiConfigCard(
+                        config = config,
+                        onEdit = {
+                            editingConfig = config
+                            editingType = "image"
+                            showEditDialog = true
+                        },
+                        onDelete = {
+                            viewModel.deleteApiConfig(config.id)
+                            Toast.makeText(context, "配置已删除", Toast.LENGTH_SHORT).show()
+                        }
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
-            // 保存按钮
-            Button(
+            // 添加生图配置按钮
+            OutlinedButton(
                 onClick = {
-                    viewModel.saveProvider(
-                        imageConfig = com.gzzz.toimage.domain.model.ServiceConfig(
-                            displayName = imageDisplayName,
-                            baseUrl = imageBaseUrl.trimEnd('/'),
-                            apiKey = imageApiKey,
-                            model = imageModel
-                        ),
-                        chatConfig = com.gzzz.toimage.domain.model.ServiceConfig(
-                            displayName = chatDisplayName,
-                            baseUrl = chatBaseUrl.trimEnd('/'),
-                            apiKey = chatApiKey,
-                            model = chatModel
-                        )
-                    )
-                    Toast.makeText(context, "配置已保存", Toast.LENGTH_SHORT).show()
+                    editingConfig = null
+                    editingType = "image"
+                    showEditDialog = true
                 },
-                modifier = Modifier.fillMaxWidth(),
-                enabled = chatBaseUrl.isNotBlank() && chatApiKey.isNotBlank()
+                modifier = Modifier.fillMaxWidth()
             ) {
-                Text("保存配置")
+                Icon(Icons.Default.Add, contentDescription = null)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("添加生图配置")
             }
 
             Spacer(modifier = Modifier.height(24.dp))
@@ -637,5 +528,83 @@ private fun StorageInfoRow(label: String, value: String) {
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurface
         )
+    }
+}
+
+@Composable
+private fun ApiConfigCard(
+    config: ApiConfigEntity,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface
+        ),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = config.name,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = config.baseUrl,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                Row {
+                    IconButton(onClick = onEdit) {
+                        Icon(
+                            Icons.Default.Edit,
+                            contentDescription = "编辑",
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    IconButton(onClick = onDelete) {
+                        Icon(
+                            Icons.Default.Delete,
+                            contentDescription = "删除",
+                            tint = MaterialTheme.colorScheme.error
+                        )
+                    }
+                }
+            }
+
+            val models = try {
+                Json.decodeFromString<List<String>>(config.models)
+            } catch (e: Exception) {
+                emptyList()
+            }
+
+            if (config.type == "image") {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "渠道：${imageProviderDisplayName(config.providerId)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.secondary
+                )
+            }
+
+            if (models.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "已选模型：${models.size} 个",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
     }
 }
