@@ -16,8 +16,8 @@
 -keepattributes *Annotation*, InnerClasses
 -dontnote kotlinx.serialization.AnnotationsKt
 -keepclassmembers class kotlinx.serialization.json.** { *** Companion; }
--keepclasseswithmembers class com.gzzz.toimage.data.remote.dto.** { *; }
--keepclasseswithmembers class com.gzzz.toimage.domain.model.** { *; }
+-keepclasseswithmembers class com.gzzz.tochat.data.remote.dto.** { *; }
+-keepclasseswithmembers class com.gzzz.tochat.domain.model.** { *; }
 
 # Keep @Serializable classes and their companion objects
 -keepattributes RuntimeVisibleAnnotations,AnnotationDefault
@@ -44,9 +44,9 @@
 -keep class androidx.security.crypto.** { *; }
 
 # === Keep app components ===
--keep class com.gzzz.toimage.ToimageApp { *; }
--keep class com.gzzz.toimage.MainActivity { *; }
--keep class com.gzzz.toimage.service.GenerationService { *; }
+-keep class com.gzzz.tochat.ToChatApp { *; }
+-keep class com.gzzz.tochat.MainActivity { *; }
+-keep class com.gzzz.tochat.service.GenerationService { *; }
 
 # === Remove logging in release ===
 -assumenosideeffects class android.util.Log {

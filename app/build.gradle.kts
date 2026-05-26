@@ -7,11 +7,11 @@ plugins {
 }
 
 android {
-    namespace = "com.gzzz.toimage"
+    namespace = "com.gzzz.tochat"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.gzzz.toimage"
+        applicationId = "com.gzzz.tochat"
         minSdk = 26
         targetSdk = 34
         versionCode = 1
@@ -117,3 +117,4 @@ dependencies {
     // PDF text extraction
     implementation("com.tom-roush:pdfbox-android:2.0.27.0")
 }
+

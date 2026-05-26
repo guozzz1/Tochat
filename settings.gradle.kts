@@ -20,5 +20,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "Toimage"
+rootProject.name = "ToChat"
 include(":app")
