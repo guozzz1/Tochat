@@ -41,7 +41,9 @@ data class RoundtableParticipant(
     val configName: String,
     val baseUrl: String,
     val apiKey: String,
-    val model: String
+    val model: String,
+    val chatPath: String = "v1/chat/completions",
+    val chatProtocol: String = "chat_completions"
 ) {
     val key: String get() = "$configId::$model"
 }
@@ -321,7 +323,9 @@ class GenerationRepository @Inject constructor(
                         baseUrl = participant.baseUrl,
                         apiKey = participant.apiKey,
                         model = participant.model,
-                        messages = messages
+                        messages = messages,
+                        chatPath = participant.chatPath,
+                        chatProtocol = participant.chatProtocol
                     ).collect { event ->
                         when (event) {
                             is ChatStreamEvent.Delta -> {
@@ -380,6 +384,8 @@ class GenerationRepository @Inject constructor(
                 baseUrl = leader.baseUrl,
                 apiKey = leader.apiKey,
                 model = leader.model,
+                chatPath = leader.chatPath,
+                chatProtocol = leader.chatProtocol,
                 messages = listOf(
                     ChatMessageDto(role = "system", content = buildRoundtableSummarySystemPrompt()),
                     ChatMessageDto(

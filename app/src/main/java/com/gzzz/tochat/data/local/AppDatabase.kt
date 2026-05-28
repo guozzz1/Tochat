@@ -14,7 +14,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         KnowledgeDocumentEntity::class,
         KnowledgeChunkEntity::class
     ],
-    version = 8,
+    version = 11,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -97,6 +97,27 @@ abstract class AppDatabase : RoomDatabase() {
                 """.trimIndent())
                 db.execSQL("CREATE INDEX IF NOT EXISTS index_knowledge_chunks_documentId ON knowledge_chunks(documentId)")
                 db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_knowledge_chunks_documentId_chunkIndex ON knowledge_chunks(documentId, chunkIndex)")
+            }
+        }
+
+        val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE chat_sessions ADD COLUMN parentSessionId TEXT DEFAULT NULL")
+                db.execSQL("ALTER TABLE chat_sessions ADD COLUMN branchedFromMessageId TEXT DEFAULT NULL")
+                db.execSQL("ALTER TABLE chat_sessions ADD COLUMN branchedAt INTEGER DEFAULT NULL")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_chat_sessions_parentSessionId ON chat_sessions(parentSessionId)")
+            }
+        }
+
+        val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE api_configs ADD COLUMN chatPath TEXT NOT NULL DEFAULT 'v1/chat/completions'")
+            }
+        }
+
+        val MIGRATION_10_11 = object : Migration(10, 11) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE api_configs ADD COLUMN chatProtocol TEXT NOT NULL DEFAULT 'chat_completions'")
             }
         }
     }

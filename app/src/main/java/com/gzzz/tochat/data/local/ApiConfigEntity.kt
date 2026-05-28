@@ -13,5 +13,7 @@ data class ApiConfigEntity(
     val models: String = "",    // JSON 数组字符串，如 ["gpt-4o","gpt-4o-mini"]
     val type: String = "chat",  // "chat" 或 "image"
     val providerId: String? = null,
+    val chatPath: String = "v1/chat/completions",
+    val chatProtocol: String = "chat_completions",
     val createdAt: Long = System.currentTimeMillis()
 )

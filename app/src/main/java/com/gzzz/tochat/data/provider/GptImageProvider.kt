@@ -12,6 +12,9 @@ import com.gzzz.tochat.data.remote.dto.ChatCompletionRequest
 import com.gzzz.tochat.data.remote.dto.ChatCompletionResponse
 import com.gzzz.tochat.data.remote.dto.ChatMessageDto
 import com.gzzz.tochat.data.remote.dto.ImageGenerationRequest
+import com.gzzz.tochat.data.remote.dto.ResponsesApiRequest
+import com.gzzz.tochat.data.remote.dto.ResponsesApiResponse
+import com.gzzz.tochat.data.remote.dto.ResponsesInputMessageDto
 import com.gzzz.tochat.domain.model.GenerationRequest
 import com.gzzz.tochat.domain.model.GenerationResult
 import com.gzzz.tochat.domain.model.ServiceConfig
@@ -19,12 +22,14 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -62,10 +67,16 @@ class GptImageProvider @Inject constructor(
     private var apiKey: String = ""
     private var chatApiKey: String = ""
     private var chatModel: String = "gpt-4o-mini"
+    private var chatPath: String = DEFAULT_CHAT_PATH
+    private var chatProtocol: String = PROTOCOL_CHAT_COMPLETIONS
 
     private companion object {
         const val TAG = "GptImageProvider"
         const val enableChatFallback = true
+        const val PROTOCOL_CHAT_COMPLETIONS = "chat_completions"
+        const val PROTOCOL_RESPONSES = "responses"
+        const val DEFAULT_CHAT_PATH = "v1/chat/completions"
+        const val DEFAULT_RESPONSES_PATH = "v1/responses"
     }
 
     override val isConfigured: Boolean
@@ -74,40 +85,56 @@ class GptImageProvider @Inject constructor(
     @Volatile
     private var currentCall: retrofit2.Call<*>? = null
 
-    fun configureChat(baseUrl: String, apiKey: String, model: String) {
+    fun configureChat(
+        baseUrl: String,
+        apiKey: String,
+        model: String,
+        chatPath: String = DEFAULT_CHAT_PATH,
+        chatProtocol: String = PROTOCOL_CHAT_COMPLETIONS
+    ) {
         this.chatApiKey = apiKey
         this.chatModel = model.trim().ifEmpty { "gpt-4o-mini" }
+        this.chatProtocol = normalizeChatProtocol(chatProtocol)
+        this.chatPath = chatPath.trim().ifBlank {
+            if (this.chatProtocol == PROTOCOL_RESPONSES) DEFAULT_RESPONSES_PATH else DEFAULT_CHAT_PATH
+        }
+
+        val normalizedBaseUrl = normalizedHttpBaseUrl(baseUrl)
+        if (normalizedBaseUrl == null) {
+            chatApiService = null
+            return
+        }
 
         val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
-        if (baseUrl.isNotBlank() && (baseUrl.startsWith("http://") || baseUrl.startsWith("https://"))) {
-            val chatClient = OkHttpClient.Builder()
-                .connectTimeout(30, TimeUnit.SECONDS)
-                .readTimeout(180, TimeUnit.SECONDS)
-                .writeTimeout(30, TimeUnit.SECONDS)
-                .addInterceptor(HttpLoggingInterceptor().apply {
-                    level = HttpLoggingInterceptor.Level.BASIC
-                })
-                .build()
+        val chatClient = OkHttpClient.Builder()
+            .connectTimeout(30, TimeUnit.SECONDS)
+            .readTimeout(180, TimeUnit.SECONDS)
+            .writeTimeout(30, TimeUnit.SECONDS)
+            .addInterceptor(HttpLoggingInterceptor().apply {
+                level = HttpLoggingInterceptor.Level.BASIC
+            })
+            .build()
 
-            val chatRetrofit = Retrofit.Builder()
-                .baseUrl(baseUrl.trimEnd('/') + "/")
-                .client(chatClient)
-                .addConverterFactory("application/json".toMediaType().let { json.asConverterFactory(it) })
-                .build()
+        val chatRetrofit = Retrofit.Builder()
+            .baseUrl(normalizedBaseUrl)
+            .client(chatClient)
+            .addConverterFactory("application/json".toMediaType().let { json.asConverterFactory(it) })
+            .build()
 
-            chatApiService = chatRetrofit.create(ChatApiService::class.java)
-        }
+        chatApiService = chatRetrofit.create(ChatApiService::class.java)
     }
 
     override fun configure(image: ServiceConfig, chat: ServiceConfig) {
         this.apiKey = image.apiKey
         this.chatApiKey = chat.apiKey.ifBlank { image.apiKey }
         this.chatModel = chat.model.trim().ifEmpty { "gpt-4o-mini" }
+        this.chatProtocol = PROTOCOL_CHAT_COMPLETIONS
+        this.chatPath = DEFAULT_CHAT_PATH
 
         val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
-        // 配置图片服务（仅当 URL 有效时）
-        if (image.baseUrl.isNotBlank() && (image.baseUrl.startsWith("http://") || image.baseUrl.startsWith("https://"))) {
+        val imageBaseUrl = normalizedHttpBaseUrl(image.baseUrl)
+        if (imageBaseUrl != null) {
             val imgClient = OkHttpClient.Builder()
                 .connectTimeout(30, TimeUnit.SECONDS)
                 .readTimeout(180, TimeUnit.SECONDS)
@@ -118,7 +145,7 @@ class GptImageProvider @Inject constructor(
                 .build()
 
             val imgRetrofit = Retrofit.Builder()
-                .baseUrl(image.baseUrl.trimEnd('/') + "/")
+                .baseUrl(imageBaseUrl)
                 .client(imgClient)
                 .addConverterFactory("application/json".toMediaType().let { json.asConverterFactory(it) })
                 .build()
@@ -129,31 +156,19 @@ class GptImageProvider @Inject constructor(
         }
 
         val effectiveChatUrl = chat.baseUrl.ifBlank { image.baseUrl }
-
-        // 配置聊天服务（仅当 URL 有效时）
-        if (effectiveChatUrl.isNotBlank() && (effectiveChatUrl.startsWith("http://") || effectiveChatUrl.startsWith("https://"))) {
-            val chatClient = if (chat.baseUrl.isNotBlank()) {
-                OkHttpClient.Builder()
-                    .connectTimeout(30, TimeUnit.SECONDS)
-                    .readTimeout(180, TimeUnit.SECONDS)
-                    .writeTimeout(30, TimeUnit.SECONDS)
-                    .addInterceptor(HttpLoggingInterceptor().apply {
-                        level = HttpLoggingInterceptor.Level.BODY
-                    })
-                    .build()
-            } else {
-                OkHttpClient.Builder()
-                    .connectTimeout(30, TimeUnit.SECONDS)
-                    .readTimeout(180, TimeUnit.SECONDS)
-                    .writeTimeout(30, TimeUnit.SECONDS)
-                    .addInterceptor(HttpLoggingInterceptor().apply {
-                        level = HttpLoggingInterceptor.Level.BODY
-                    })
-                    .build()
-            }
+        val chatBaseUrl = normalizedHttpBaseUrl(effectiveChatUrl)
+        if (chatBaseUrl != null) {
+            val chatClient = OkHttpClient.Builder()
+                .connectTimeout(30, TimeUnit.SECONDS)
+                .readTimeout(180, TimeUnit.SECONDS)
+                .writeTimeout(30, TimeUnit.SECONDS)
+                .addInterceptor(HttpLoggingInterceptor().apply {
+                    level = HttpLoggingInterceptor.Level.BODY
+                })
+                .build()
 
             val chatRetrofit = Retrofit.Builder()
-                .baseUrl(effectiveChatUrl.trimEnd('/') + "/")
+                .baseUrl(chatBaseUrl)
                 .client(chatClient)
                 .addConverterFactory("application/json".toMediaType().let { json.asConverterFactory(it) })
                 .build()
@@ -299,6 +314,12 @@ class GptImageProvider @Inject constructor(
             return@flow
         }
 
+        val protocol = normalizeChatProtocol(chatProtocol)
+        val endpointPath = normalizeChatPath(chatPath, protocol)
+        if (protocol == PROTOCOL_RESPONSES) {
+            sendResponsesRequest(service, endpointPath, chatApiKey, chatModel, messages)
+            return@flow
+        }
         val request = ChatCompletionRequest(
             model = chatModel,
             messages = messages,
@@ -312,6 +333,7 @@ class GptImageProvider @Inject constructor(
             Log.d(TAG, "chat stream start")
 
             val response = service.chatCompletionsStream(
+                url = endpointPath,
                 auth = "Bearer $chatApiKey",
                 request = request
             )
@@ -320,9 +342,9 @@ class GptImageProvider @Inject constructor(
             if (!response.isSuccessful) {
                 val code = response.code()
                 val errorText = runCatching { response.errorBody()?.string() }.getOrNull() ?: ""
-                Log.e(TAG, "Chat stream HTTP $code $errorText")
+                Log.e(TAG, "Chat stream HTTP $code $endpointPath $errorText")
                 if (code == 401 || code == 403) {
-                    emit(ChatStreamEvent.Error(mapHttpError(code, errorText)))
+                    emit(ChatStreamEvent.Error(mapHttpError(code, formatHttpError(code, endpointPath, errorText))))
                     return@flow
                 }
                 throw IllegalStateException("stream_http_$code")
@@ -382,10 +404,18 @@ class GptImageProvider @Inject constructor(
                     stream = false
                 )
                 val fallbackResponse = service.chatCompletions(
+                    url = endpointPath,
                     auth = "Bearer $chatApiKey",
                     request = fallbackRequest
                 )
-                val text = fallbackResponse.choices.firstOrNull()?.message?.content ?: ""
+                if (!fallbackResponse.isSuccessful) {
+                    val code = fallbackResponse.code()
+                    val errorText = runCatching { fallbackResponse.errorBody()?.string() }.getOrNull().orEmpty()
+                    Log.e(TAG, "Chat HTTP $code $endpointPath $errorText")
+                    emit(ChatStreamEvent.Error(mapHttpError(code, formatHttpError(code, endpointPath, errorText))))
+                    return@flow
+                }
+                val text = fallbackResponse.body()?.choices?.firstOrNull()?.message?.content ?: ""
                 if (emittedDelta) {
                     emit(ChatStreamEvent.Done(fullText.toString() + text))
                 } else {
@@ -411,6 +441,63 @@ class GptImageProvider @Inject constructor(
             }
         }
     }.flowOn(Dispatchers.IO)
+
+    private suspend fun FlowCollector<ChatStreamEvent>.sendResponsesRequest(
+        service: ChatApiService,
+        endpointPath: String,
+        apiKey: String,
+        model: String,
+        messages: List<ChatMessageDto>
+    ) {
+        val request = ResponsesApiRequest(
+            model = model.trim().ifEmpty { "gpt-4o-mini" },
+            input = messages.map { ResponsesInputMessageDto(role = it.role, content = it.content) },
+            stream = false
+        )
+        val response = service.responses(
+            url = endpointPath,
+            auth = "Bearer $apiKey",
+            request = request
+        )
+        if (!response.isSuccessful) {
+            val code = response.code()
+            val errorText = runCatching { response.errorBody()?.string() }.getOrNull().orEmpty()
+            Log.e(TAG, "Responses chat HTTP $code $endpointPath $errorText")
+            emit(ChatStreamEvent.Error(mapHttpError(code, formatHttpError(code, endpointPath, errorText))))
+            return
+        }
+        val text = extractResponsesText(response.body())
+        if (text.isBlank()) {
+            emit(ChatStreamEvent.Error(GenerationError.ApiError(0, "Responses 接口返回内容为空")))
+        } else {
+            emit(ChatStreamEvent.Done(text))
+        }
+    }
+
+    private fun extractResponsesText(response: ResponsesApiResponse?): String {
+        if (response == null) return ""
+        response.outputText?.takeIf { it.isNotBlank() }?.let { return it }
+        return response.output
+            .flatMap { it.content }
+            .mapNotNull { it.text }
+            .joinToString("")
+    }
+
+    private fun normalizeChatProtocol(protocol: String): String {
+        return if (protocol == PROTOCOL_RESPONSES) PROTOCOL_RESPONSES else PROTOCOL_CHAT_COMPLETIONS
+    }
+
+    private fun normalizeChatPath(path: String, protocol: String): String {
+        val defaultPath = if (protocol == PROTOCOL_RESPONSES) DEFAULT_RESPONSES_PATH else DEFAULT_CHAT_PATH
+        val trimmed = path.trim().ifBlank { defaultPath }
+        if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) return trimmed
+        return trimmed.trimStart('/')
+    }
+
+    private fun formatHttpError(code: Int, endpointPath: String, errorText: String): String {
+        val body = errorText.ifBlank { "无错误内容" }
+        return "HTTP $code，请检查聊天接口路径：$endpointPath。服务返回：$body"
+    }
 
     private fun mapHttpError(code: Int, errorText: String): GenerationError = when (code) {
         429 -> GenerationError.ApiError(429, errorText)
@@ -517,5 +604,13 @@ class GptImageProvider @Inject constructor(
         } catch (e: Exception) {
             null
         }
+    }
+
+    private fun normalizedHttpBaseUrl(url: String): String? {
+        val normalized = url.trim().trimEnd('/') + "/"
+        val httpUrl = normalized.toHttpUrlOrNull() ?: return null
+        if (httpUrl.scheme != "http" && httpUrl.scheme != "https") return null
+        if (httpUrl.host.isBlank()) return null
+        return normalized
     }
 }

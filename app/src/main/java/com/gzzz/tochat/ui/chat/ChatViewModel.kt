@@ -42,6 +42,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -122,6 +123,11 @@ class ChatViewModel @Inject constructor(
         historyRepository.observeSessions()
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    val sessionSearchText: StateFlow<Map<String, String>> =
+        historyRepository.observeSessionSearchText()
+            .map { entries -> entries.associate { it.sessionId to it.content } }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
+
     init {
         // 注册内置 provider
         providerRegistry.register(gptImageProvider)
@@ -146,9 +152,9 @@ class ChatViewModel @Inject constructor(
         // 加载（或自动选择）当前对话模型
         viewModelScope.launch {
             val (savedConfigId, savedModel) = settingsRepository.getCurrentModel()
-            val apiConfigs = settingsRepository.getApiConfigs()
+            val chatConfigs = settingsRepository.getApiConfigsByType("chat")
 
-            val (effectiveConfigId, effectiveModel) = pickActiveChatModel(savedConfigId, savedModel, apiConfigs)
+            val (effectiveConfigId, effectiveModel) = pickActiveChatModel(savedConfigId, savedModel, chatConfigs)
 
             if (effectiveConfigId != null && effectiveModel != null) {
                 if (effectiveConfigId != savedConfigId || effectiveModel != savedModel) {
@@ -371,7 +377,7 @@ class ChatViewModel @Inject constructor(
             )
 
             // 应用对话配置到 provider
-            gptImageProvider.configureChat(apiConfig.baseUrl, apiConfig.apiKey, model)
+            gptImageProvider.configureChat(apiConfig.baseUrl, apiConfig.apiKey, model, apiConfig.chatPath, apiConfig.chatProtocol)
 
             var currentSessionId = _uiState.value.currentSessionId
 
@@ -639,6 +645,27 @@ class ChatViewModel @Inject constructor(
         }
     }
 
+    suspend fun branchFromMessage(messageId: String): String? {
+        if (_uiState.value.isGenerating) {
+            _toastMessage.emit("生成中，暂不能创建分支")
+            return null
+        }
+
+        val branchSession = historyRepository.createBranchFromMessage(messageId)
+        if (branchSession == null) {
+            _toastMessage.emit("暂不支持从这条消息创建分支")
+            return null
+        }
+
+        _currentSessionId.value = branchSession.id
+        _uiState.value = _uiState.value.copy(
+            currentSessionId = branchSession.id,
+            currentSession = branchSession
+        )
+        _toastMessage.emit("已创建分支")
+        return branchSession.id
+    }
+
     fun newSession() {
         _uiState.value = _uiState.value.copy(
             currentSessionId = null,
@@ -712,7 +739,7 @@ class ChatViewModel @Inject constructor(
 
     private suspend fun applyChatConfigById(configId: String, model: String) {
         val apiConfig = settingsRepository.getApiConfigById(configId) ?: return
-        gptImageProvider.configureChat(apiConfig.baseUrl, apiConfig.apiKey, model)
+        gptImageProvider.configureChat(apiConfig.baseUrl, apiConfig.apiKey, model, apiConfig.chatPath, apiConfig.chatProtocol)
     }
 
     private suspend fun buildFinalUserPrompt(prompt: String, attachment: FileAttachment?): PromptContext {

@@ -27,6 +27,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.decodeFromString
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
@@ -72,6 +73,7 @@ class SettingsViewModel @Inject constructor(
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val backgroundPath: StateFlow<String?> = settingsRepository.backgroundPath
+    val themeMode: StateFlow<String> = settingsRepository.themeMode
 
     init {
         viewModelScope.launch {
@@ -101,12 +103,18 @@ class SettingsViewModel @Inject constructor(
         settingsRepository.setBackgroundPath(null)
     }
 
+    fun setThemeMode(mode: String) {
+        settingsRepository.setThemeMode(mode)
+    }
+
     fun saveProvider(
         imageConfig: ServiceConfig
     ) {
+        if (!isValidHttpUrl(imageConfig.baseUrl.trim())) return
+
         val config = ProviderConfig(
             id = PROVIDER_GPT_IMAGE,
-            image = imageConfig,
+            image = imageConfig.copy(baseUrl = imageConfig.baseUrl.trim().trimEnd('/')),
             chat = ServiceConfig(displayName = "", baseUrl = "", apiKey = "", model = ""),
             isDefault = true
         )
@@ -116,7 +124,7 @@ class SettingsViewModel @Inject constructor(
 
     fun fetchImageModels(baseUrl: String, apiKey: String) {
         if (baseUrl.isBlank() || apiKey.isBlank()) return
-        if (!baseUrl.startsWith("http://") && !baseUrl.startsWith("https://")) return
+        if (!isValidHttpUrl(baseUrl.trim())) return
         viewModelScope.launch {
             _isLoadingImageModels.value = true
             val models = fetchModels(baseUrl, apiKey)
@@ -127,7 +135,7 @@ class SettingsViewModel @Inject constructor(
 
     fun fetchChatModels(baseUrl: String, apiKey: String) {
         if (baseUrl.isBlank() || apiKey.isBlank()) return
-        if (!baseUrl.startsWith("http://") && !baseUrl.startsWith("https://")) return
+        if (!isValidHttpUrl(baseUrl.trim())) return
         viewModelScope.launch {
             _isLoadingChatModels.value = true
             val models = fetchModels(baseUrl, apiKey)
@@ -139,10 +147,7 @@ class SettingsViewModel @Inject constructor(
     private suspend fun fetchModels(baseUrl: String, apiKey: String): List<String> =
         withContext(Dispatchers.IO) {
             try {
-                // 校验 URL 格式
-                if (!baseUrl.startsWith("http://") && !baseUrl.startsWith("https://")) {
-                    return@withContext emptyList()
-                }
+                val normalizedBaseUrl = normalizedHttpBaseUrl(baseUrl) ?: return@withContext emptyList()
 
                 val json = Json { ignoreUnknownKeys = true }
                 val client = OkHttpClient.Builder()
@@ -154,7 +159,7 @@ class SettingsViewModel @Inject constructor(
                     .build()
 
                 val retrofit = Retrofit.Builder()
-                    .baseUrl(baseUrl.trimEnd('/') + "/")
+                    .baseUrl(normalizedBaseUrl)
                     .client(client)
                     .addConverterFactory("application/json".toMediaType().let { json.asConverterFactory(it) })
                     .build()
@@ -221,20 +226,30 @@ class SettingsViewModel @Inject constructor(
         apiKey: String,
         models: List<String>,
         type: String = "chat",
-        providerId: String? = null
-    ) {
+        providerId: String? = null,
+        chatPath: String = "v1/chat/completions",
+        chatProtocol: String = "chat_completions"
+    ): Boolean {
+        val normalizedBaseUrl = normalizedHttpBaseUrl(baseUrl)?.trimEnd('/') ?: return false
+        val normalizedChatProtocol = chatProtocol.trim().ifBlank { "chat_completions" }
+        val defaultPath = if (normalizedChatProtocol == "responses") "v1/responses" else "v1/chat/completions"
+        val normalizedChatPath = chatPath.trim().ifBlank { defaultPath }
+
         viewModelScope.launch {
             val config = ApiConfigEntity(
                 id = id,
                 name = name,
-                baseUrl = baseUrl.trimEnd('/'),
+                baseUrl = normalizedBaseUrl,
                 apiKey = apiKey,
                 models = Json.encodeToString(models),
                 type = type,
-                providerId = providerId
+                providerId = providerId,
+                chatPath = normalizedChatPath,
+                chatProtocol = normalizedChatProtocol
             )
             settingsRepository.saveApiConfig(config)
         }
+        return true
     }
 
     fun deleteApiConfig(id: String) {
@@ -245,10 +260,22 @@ class SettingsViewModel @Inject constructor(
 
     fun fetchModelsForConfig(baseUrl: String, apiKey: String, onResult: (List<String>) -> Unit) {
         if (baseUrl.isBlank() || apiKey.isBlank()) return
-        if (!baseUrl.startsWith("http://") && !baseUrl.startsWith("https://")) return
+        if (!isValidHttpUrl(baseUrl.trim())) return
         viewModelScope.launch {
             val models = fetchModels(baseUrl, apiKey)
             onResult(models)
         }
+    }
+
+    private fun isValidHttpUrl(url: String): Boolean {
+        return normalizedHttpBaseUrl(url) != null
+    }
+
+    private fun normalizedHttpBaseUrl(url: String): String? {
+        val normalized = url.trim().trimEnd('/') + "/"
+        val httpUrl = normalized.toHttpUrlOrNull() ?: return null
+        if (httpUrl.scheme != "http" && httpUrl.scheme != "https") return null
+        if (httpUrl.host.isBlank()) return null
+        return normalized
     }
 }

@@ -5,11 +5,15 @@ import com.gzzz.tochat.data.remote.ChatApiService
 import com.gzzz.tochat.data.remote.dto.ChatCompletionChunk
 import com.gzzz.tochat.data.remote.dto.ChatCompletionRequest
 import com.gzzz.tochat.data.remote.dto.ChatMessageDto
+import com.gzzz.tochat.data.remote.dto.ResponsesApiRequest
+import com.gzzz.tochat.data.remote.dto.ResponsesApiResponse
+import com.gzzz.tochat.data.remote.dto.ResponsesInputMessageDto
 import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFactory
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
@@ -31,7 +35,9 @@ class OpenAiChatClient @Inject constructor() {
         baseUrl: String,
         apiKey: String,
         model: String,
-        messages: List<ChatMessageDto>
+        messages: List<ChatMessageDto>,
+        chatPath: String = DEFAULT_CHAT_PATH,
+        chatProtocol: String = PROTOCOL_CHAT_COMPLETIONS
     ): Flow<ChatStreamEvent> = flow {
         if (baseUrl.isBlank() || !(baseUrl.startsWith("http://") || baseUrl.startsWith("https://"))) {
             emit(ChatStreamEvent.Error(GenerationError.Unknown(IllegalArgumentException("Base URL 无效"))))
@@ -43,6 +49,12 @@ class OpenAiChatClient @Inject constructor() {
         }
 
         val service = createService(baseUrl)
+        val protocol = normalizeChatProtocol(chatProtocol)
+        val endpointPath = normalizeChatPath(chatPath, protocol)
+        if (protocol == PROTOCOL_RESPONSES) {
+            sendResponsesRequest(service, endpointPath, apiKey, model, messages)
+            return@flow
+        }
         val request = ChatCompletionRequest(
             model = model.trim().ifEmpty { "gpt-4o-mini" },
             messages = messages,
@@ -53,6 +65,7 @@ class OpenAiChatClient @Inject constructor() {
 
         try {
             val response = service.chatCompletionsStream(
+                url = endpointPath,
                 auth = "Bearer $apiKey",
                 request = request
             )
@@ -60,9 +73,9 @@ class OpenAiChatClient @Inject constructor() {
             if (!response.isSuccessful) {
                 val code = response.code()
                 val errorText = runCatching { response.errorBody()?.string() }.getOrNull() ?: ""
-                Log.e(TAG, "Roundtable chat stream HTTP $code $errorText")
+                Log.e(TAG, "Roundtable chat stream HTTP $code $endpointPath $errorText")
                 if (code == 401 || code == 403) {
-                    emit(ChatStreamEvent.Error(mapHttpError(code, errorText)))
+                    emit(ChatStreamEvent.Error(mapHttpError(code, formatHttpError(code, endpointPath, errorText))))
                     return@flow
                 }
                 throw IllegalStateException("stream_http_$code")
@@ -113,10 +126,18 @@ class OpenAiChatClient @Inject constructor() {
             Log.w(TAG, "Roundtable chat stream failed, fallback to non-stream", e)
             try {
                 val fallbackResponse = service.chatCompletions(
+                    url = endpointPath,
                     auth = "Bearer $apiKey",
                     request = request.copy(stream = false)
                 )
-                val text = fallbackResponse.choices.firstOrNull()?.message?.content ?: ""
+                if (!fallbackResponse.isSuccessful) {
+                    val code = fallbackResponse.code()
+                    val errorText = runCatching { fallbackResponse.errorBody()?.string() }.getOrNull().orEmpty()
+                    Log.e(TAG, "Roundtable chat HTTP $code $endpointPath $errorText")
+                    emit(ChatStreamEvent.Error(mapHttpError(code, formatHttpError(code, endpointPath, errorText))))
+                    return@flow
+                }
+                val text = fallbackResponse.body()?.choices?.firstOrNull()?.message?.content ?: ""
                 emit(ChatStreamEvent.Done(if (emittedDelta) fullText.toString() + text else text))
             } catch (fallbackError: CancellationException) {
                 emit(ChatStreamEvent.Error(GenerationError.Cancelled))
@@ -153,6 +174,63 @@ class OpenAiChatClient @Inject constructor() {
             .create(ChatApiService::class.java)
     }
 
+    private suspend fun FlowCollector<ChatStreamEvent>.sendResponsesRequest(
+        service: ChatApiService,
+        endpointPath: String,
+        apiKey: String,
+        model: String,
+        messages: List<ChatMessageDto>
+    ) {
+        val request = ResponsesApiRequest(
+            model = model.trim().ifEmpty { "gpt-4o-mini" },
+            input = messages.map { ResponsesInputMessageDto(role = it.role, content = it.content) },
+            stream = false
+        )
+        val response = service.responses(
+            url = endpointPath,
+            auth = "Bearer $apiKey",
+            request = request
+        )
+        if (!response.isSuccessful) {
+            val code = response.code()
+            val errorText = runCatching { response.errorBody()?.string() }.getOrNull().orEmpty()
+            Log.e(TAG, "Responses chat HTTP $code $endpointPath $errorText")
+            emit(ChatStreamEvent.Error(mapHttpError(code, formatHttpError(code, endpointPath, errorText))))
+            return
+        }
+        val text = extractResponsesText(response.body())
+        if (text.isBlank()) {
+            emit(ChatStreamEvent.Error(GenerationError.ApiError(0, "Responses 接口返回内容为空")))
+        } else {
+            emit(ChatStreamEvent.Done(text))
+        }
+    }
+
+    private fun extractResponsesText(response: ResponsesApiResponse?): String {
+        if (response == null) return ""
+        response.outputText?.takeIf { it.isNotBlank() }?.let { return it }
+        return response.output
+            .flatMap { it.content }
+            .mapNotNull { it.text }
+            .joinToString("")
+    }
+
+    private fun normalizeChatProtocol(protocol: String): String {
+        return if (protocol == PROTOCOL_RESPONSES) PROTOCOL_RESPONSES else PROTOCOL_CHAT_COMPLETIONS
+    }
+
+    private fun normalizeChatPath(path: String, protocol: String): String {
+        val defaultPath = if (protocol == PROTOCOL_RESPONSES) DEFAULT_RESPONSES_PATH else DEFAULT_CHAT_PATH
+        val trimmed = path.trim().ifBlank { defaultPath }
+        if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) return trimmed
+        return trimmed.trimStart('/')
+    }
+
+    private fun formatHttpError(code: Int, endpointPath: String, errorText: String): String {
+        val body = errorText.ifBlank { "无错误内容" }
+        return "HTTP $code，请检查聊天接口路径：$endpointPath。服务返回：$body"
+    }
+
     private fun mapHttpError(code: Int, errorText: String): GenerationError = when (code) {
         429 -> GenerationError.ApiError(429, errorText)
         400 -> if (errorText.contains("content_policy", ignoreCase = true)) {
@@ -171,5 +249,9 @@ class OpenAiChatClient @Inject constructor() {
 
     private companion object {
         const val TAG = "OpenAiChatClient"
+        const val PROTOCOL_CHAT_COMPLETIONS = "chat_completions"
+        const val PROTOCOL_RESPONSES = "responses"
+        const val DEFAULT_CHAT_PATH = "v1/chat/completions"
+        const val DEFAULT_RESPONSES_PATH = "v1/responses"
     }
 }

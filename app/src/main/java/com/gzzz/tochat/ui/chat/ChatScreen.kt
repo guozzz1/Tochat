@@ -120,6 +120,7 @@ fun ChatScreen(
     val uiState by viewModel.uiState.collectAsState()
     val messages by viewModel.messages.collectAsState()
     val sessions by viewModel.sessions.collectAsState()
+    val sessionSearchText by viewModel.sessionSearchText.collectAsState()
     val knowledgeDocuments by viewModel.knowledgeDocuments.collectAsState()
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -339,6 +340,7 @@ fun ChatScreen(
             ) {
                 SessionDrawerContent(
                     sessions = sessions,
+                    sessionSearchText = sessionSearchText,
                     currentSessionId = uiState.currentSessionId,
                     onSessionClick = { id ->
                         scope.launch {
@@ -577,6 +579,7 @@ fun ChatScreen(
                         showImageButton = true,
                         isConnected = uiState.isConnected,
                         isGenerating = uiState.isGenerating,
+                        showInputCancelButton = uiState.isGenerating && !uiState.isStreaming,
                         currentChatModel = uiState.currentChatModel,
                         currentImageModel = uiState.currentImageModel,
                         knowledgeEnabled = uiState.knowledgeEnabled,
@@ -637,7 +640,8 @@ fun ChatScreen(
                                 message.messageType == "roundtable" && message.status == "running" -> {
                                     TextMessageBubble(
                                         text = message.content ?: "",
-                                        isStreaming = uiState.isStreaming
+                                        isStreaming = uiState.isStreaming,
+                                        onCancel = { viewModel.cancelGeneration() }
                                     )
                                 }
                                 message.messageType == "roundtable" && message.status == "success" -> {
@@ -664,7 +668,8 @@ fun ChatScreen(
                                 message.messageType == "text" && message.status == "running" -> {
                                     TextMessageBubble(
                                         text = message.content ?: "",
-                                        isStreaming = uiState.isStreaming
+                                        isStreaming = uiState.isStreaming,
+                                        onCancel = { viewModel.cancelGeneration() }
                                     )
                                 }
                                 message.messageType == "text" && message.status == "success" -> {
@@ -673,6 +678,18 @@ fun ChatScreen(
                                         null
                                     } else {
                                         { retryFromPreviousUserMessage(messages, message, viewModel, context) }
+                                    }
+                                    val branchAction: (() -> Unit)? = if (uiState.isGenerating) {
+                                        null
+                                    } else {
+                                        {
+                                            scope.launch {
+                                                val branchSessionId = viewModel.branchFromMessage(message.id)
+                                                if (branchSessionId != null) {
+                                                    onNavigateToSession(branchSessionId)
+                                                }
+                                            }
+                                        }
                                     }
                                     TextMessageBubble(
                                         text = text,
@@ -685,7 +702,8 @@ fun ChatScreen(
                                                 answer = text
                                             )
                                         },
-                                        onRetry = retryAction
+                                        onRetry = retryAction,
+                                        onBranch = branchAction
                                     )
                                 }
                                 message.messageType == "text" && message.status == "failed" -> {
@@ -821,6 +839,7 @@ private fun ChatInputBar(
     showImageButton: Boolean,
     isConnected: Boolean,
     isGenerating: Boolean,
+    showInputCancelButton: Boolean,
     currentChatModel: String?,
     currentImageModel: String?,
     knowledgeEnabled: Boolean,
@@ -911,7 +930,8 @@ private fun ChatInputBar(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 8.dp, vertical = 2.dp),
-            verticalAlignment = Alignment.CenterVertically
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             val knowledgeText = when {
                 knowledgeEnabled && selectedKnowledgeCount > 0 -> "知识库 · ${selectedKnowledgeCount} 个文档"
@@ -920,6 +940,7 @@ private fun ChatInputBar(
             }
             Row(
                 modifier = Modifier
+                    .weight(1f, fill = false)
                     .clip(RoundedCornerShape(16.dp))
                     .background(
                         if (knowledgeEnabled) MaterialTheme.colorScheme.primaryContainer
@@ -941,6 +962,50 @@ private fun ChatInputBar(
                     text = if (isImageMode) "知识库 · 生图不可用" else knowledgeText,
                     style = MaterialTheme.typography.labelSmall,
                     color = if (knowledgeEnabled) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .clickable(enabled = !isGenerating) { onRoundtableClick() }
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "圆桌",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(
+                        if (isImageMode) MaterialTheme.colorScheme.secondaryContainer
+                        else MaterialTheme.colorScheme.surfaceVariant
+                    )
+                    .clickable { onImageModeToggle() }
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    Icons.Default.Image,
+                    contentDescription = if (isImageMode) "退出生图模式" else "进入生图模式",
+                    modifier = Modifier.size(14.dp),
+                    tint = if (isImageMode) MaterialTheme.colorScheme.secondary
+                    else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(
+                    text = "生图",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (isImageMode) MaterialTheme.colorScheme.secondary
                     else MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
@@ -989,23 +1054,6 @@ private fun ChatInputBar(
                 }
             }
 
-            IconButton(onClick = onRoundtableClick, enabled = !isGenerating) {
-                Text(
-                    text = "圆",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-
-            // 生图模式切换按钮
-            IconButton(onClick = onImageModeToggle) {
-                Icon(
-                    Icons.Default.Image,
-                    contentDescription = if (isImageMode) "退出生图模式" else "进入生图模式",
-                    tint = if (isImageMode) MaterialTheme.colorScheme.secondary
-                    else MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
 
             TextField(
                 value = value,
@@ -1036,7 +1084,7 @@ private fun ChatInputBar(
 
             Spacer(modifier = Modifier.width(8.dp))
 
-            if (isGenerating) {
+            if (showInputCancelButton) {
                 // 停止按钮
                 Box(
                     modifier = Modifier
@@ -1540,7 +1588,9 @@ private fun RoundtableSheet(
                                         configName = config.name,
                                         baseUrl = config.baseUrl,
                                         apiKey = config.apiKey,
-                                        model = model
+                                        model = model,
+                                        chatPath = config.chatPath,
+                                        chatProtocol = config.chatProtocol
                                     )
                                     val isSelected = selectedParticipants.any { it.key == participant.key }
                                     Row(
@@ -1627,7 +1677,7 @@ private fun ModelSwitchSheet(
     var apiConfigs by remember { mutableStateOf<List<ApiConfigEntity>>(emptyList()) }
 
     LaunchedEffect(Unit) {
-        apiConfigs = viewModel.getAllApiConfigs()
+        apiConfigs = viewModel.getChatApiConfigs()
     }
 
     ModalBottomSheet(

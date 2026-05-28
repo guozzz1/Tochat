@@ -44,8 +44,9 @@ fun ApiConfigEditDialog(
     initialModels: List<String> = emptyList(),
     configType: String = "chat",
     initialProviderId: String? = null,
+    initialChatProtocol: String = "chat_completions",
     onDismiss: () -> Unit,
-    onConfirm: (id: String, name: String, baseUrl: String, apiKey: String, models: List<String>, providerId: String?) -> Unit,
+    onConfirm: (id: String, name: String, baseUrl: String, apiKey: String, models: List<String>, providerId: String?, chatPath: String, chatProtocol: String) -> Unit,
     onRefreshModels: (baseUrl: String, apiKey: String, callback: (List<String>) -> Unit) -> Unit
 ) {
     var name by remember { mutableStateOf(initialName) }
@@ -53,6 +54,8 @@ fun ApiConfigEditDialog(
     var apiKey by remember { mutableStateOf(initialApiKey) }
     var availableModels by remember { mutableStateOf<List<String>>(initialModels) }
     var selectedModels by remember { mutableStateOf(initialModels.toSet()) }
+    var customModelName by remember { mutableStateOf("") }
+    var chatProtocol by remember { mutableStateOf(initialChatProtocol.ifBlank { "chat_completions" }) }
     var selectedProviderId by remember { mutableStateOf(initialProviderId ?: PROVIDER_GPT_IMAGE) }
     var isLoadingModels by remember { mutableStateOf(false) }
 
@@ -123,6 +126,36 @@ fun ApiConfigEditDialog(
                     visualTransformation = PasswordVisualTransformation()
                 )
 
+                if (configType == "chat") {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = "接口格式",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    listOf(
+                        "chat_completions" to "OpenAI Chat Completions",
+                        "responses" to "OpenAI Responses"
+                    ).forEach { (protocol, label) ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(
+                                selected = chatProtocol == protocol,
+                                onClick = { chatProtocol = protocol }
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = label,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                    }
+                }
+
                 Spacer(modifier = Modifier.height(12.dp))
 
                 Row(
@@ -140,7 +173,7 @@ fun ApiConfigEditDialog(
                             if (baseUrl.isNotBlank() && apiKey.isNotBlank()) {
                                 isLoadingModels = true
                                 onRefreshModels(baseUrl, apiKey) { models ->
-                                    availableModels = models
+                                    availableModels = (models + selectedModels).distinct()
                                     isLoadingModels = false
                                 }
                             }
@@ -164,9 +197,37 @@ fun ApiConfigEditDialog(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    OutlinedTextField(
+                        value = customModelName,
+                        onValueChange = { customModelName = it },
+                        label = { Text("自定义模型名") },
+                        placeholder = { Text("例如：gpt-4o-mini") },
+                        modifier = Modifier.weight(1f),
+                        singleLine = true
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    TextButton(
+                        enabled = customModelName.trim().isNotEmpty(),
+                        onClick = {
+                            val modelName = customModelName.trim()
+                            availableModels = (availableModels + modelName).distinct()
+                            selectedModels = selectedModels + modelName
+                            customModelName = ""
+                        }
+                    ) {
+                        Text("添加")
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
                 if (availableModels.isEmpty()) {
                     Text(
-                        text = "点击刷新按钮获取模型列表",
+                        text = "点击刷新按钮获取模型列表，或手动添加模型名",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -208,7 +269,9 @@ fun ApiConfigEditDialog(
                             baseUrl,
                             apiKey,
                             selectedModels.toList(),
-                            if (configType == "image") selectedProviderId else null
+                            if (configType == "image") selectedProviderId else null,
+                            if (configType == "chat" && chatProtocol == "responses") "v1/responses" else "v1/chat/completions",
+                            if (configType == "chat") chatProtocol else "chat_completions"
                         )
                     }
                 },

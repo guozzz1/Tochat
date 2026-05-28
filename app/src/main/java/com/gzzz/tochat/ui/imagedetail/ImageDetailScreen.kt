@@ -1,5 +1,6 @@
 ﻿package com.gzzz.tochat.ui.imagedetail
 
+import android.content.ClipData
 import android.content.ContentValues
 import android.content.Intent
 import android.graphics.BitmapFactory
@@ -24,13 +25,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SaveAlt
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -48,7 +47,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -64,7 +62,6 @@ import java.io.File
 fun ImageDetailScreen(
     imagePath: String,
     onNavigateBack: () -> Unit,
-    onReuseParams: ((String) -> Unit)? = null,
     hasBackground: Boolean = false
 ) {
     val context = LocalContext.current
@@ -142,13 +139,6 @@ fun ImageDetailScreen(
                     label = "分享",
                     onClick = {
                         shareImage(context, imagePath)
-                    }
-                )
-                ActionButton(
-                    icon = Icons.Default.Refresh,
-                    label = "复用",
-                    onClick = {
-                        onReuseParams?.invoke(imagePath)
                     }
                 )
                 ActionButton(
@@ -331,9 +321,13 @@ private fun shareImage(context: android.content.Context, imagePath: String) {
             "${context.packageName}.fileprovider",
             file
         )
+        val label = "ToChat AI智能助手"
         val intent = Intent(Intent.ACTION_SEND).apply {
-            type = "image/png"
+            type = "image/*"
             putExtra(Intent.EXTRA_STREAM, uri)
+            putExtra(Intent.EXTRA_TITLE, label)
+            putExtra(Intent.EXTRA_SUBJECT, label)
+            clipData = ClipData.newUri(context.contentResolver, label, uri)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
         context.startActivity(Intent.createChooser(intent, "分享图片"))

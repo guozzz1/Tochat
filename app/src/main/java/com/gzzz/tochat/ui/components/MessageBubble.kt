@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Description
@@ -277,25 +278,31 @@ fun LoadingMessageBubble(
             modifier = Modifier
                 .clip(RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp))
                 .background(MaterialTheme.colorScheme.surfaceVariant)
-                .padding(horizontal = 16.dp, vertical = 12.dp)
+                .padding(horizontal = 12.dp, vertical = 8.dp)
         ) {
             CircularProgressIndicator(
-                modifier = Modifier.size(18.dp),
+                modifier = Modifier.size(16.dp),
                 strokeWidth = 2.dp,
                 color = MaterialTheme.colorScheme.primary
             )
-            Spacer(modifier = Modifier.width(12.dp))
+            Spacer(modifier = Modifier.width(8.dp))
             Text(
-                text = "生成中...",
-                style = MaterialTheme.typography.bodyMedium,
+                text = "生成中",
+                style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            Spacer(modifier = Modifier.width(8.dp))
-            IconButton(onClick = onCancel, modifier = Modifier.size(24.dp)) {
+            Spacer(modifier = Modifier.width(6.dp))
+            Box(
+                modifier = Modifier
+                    .size(22.dp)
+                    .clip(CircleShape)
+                    .clickable { onCancel() },
+                contentAlignment = Alignment.Center
+            ) {
                 Icon(
                     Icons.Default.Close,
                     contentDescription = "取消",
-                    modifier = Modifier.size(16.dp),
+                    modifier = Modifier.size(14.dp),
                     tint = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
@@ -351,14 +358,16 @@ fun ErrorMessageBubble(
 fun TextMessageBubble(
     text: String,
     isStreaming: Boolean = false,
+    onCancel: (() -> Unit)? = null,
     onCopy: (() -> Unit)? = null,
     onShare: (() -> Unit)? = null,
-    onRetry: (() -> Unit)? = null
+    onRetry: (() -> Unit)? = null,
+    onBranch: (() -> Unit)? = null
 ) {
     val textColor = MaterialTheme.colorScheme.onSurfaceVariant
     val surfaceColor = MaterialTheme.colorScheme.surfaceVariant
     val showActions = !isStreaming && text.isNotBlank() &&
-        (onCopy != null || onShare != null || onRetry != null)
+        (onCopy != null || onShare != null || onRetry != null || onBranch != null)
 
     // 光标动画
     val cursorAlpha by if (isStreaming) {
@@ -458,15 +467,41 @@ fun TextMessageBubble(
                             )
                         }
                     }
+                    if (onBranch != null) {
+                        IconButton(
+                            onClick = onBranch,
+                            modifier = Modifier.size(28.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.AccountTree,
+                                contentDescription = "创建分支",
+                                modifier = Modifier.size(16.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
                 }
             }
 
             if (isStreaming) {
-                Text(
-                    text = "█",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.primary.copy(alpha = cursorAlpha)
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "█",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = cursorAlpha)
+                    )
+                    if (onCancel != null) {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        IconButton(onClick = onCancel, modifier = Modifier.size(22.dp)) {
+                            Icon(
+                                Icons.Default.Close,
+                                contentDescription = "取消",
+                                modifier = Modifier.size(14.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
             }
         }
     }

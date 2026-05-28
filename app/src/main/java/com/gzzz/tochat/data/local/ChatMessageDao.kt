@@ -8,6 +8,11 @@ import androidx.room.Query
 import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
 
+data class SessionMessageSearchText(
+    val sessionId: String,
+    val content: String
+)
+
 @Dao
 interface ChatMessageDao {
 
@@ -16,6 +21,14 @@ interface ChatMessageDao {
 
     @Query("SELECT * FROM chat_messages WHERE sessionId = :sessionId ORDER BY createdAt ASC")
     suspend fun getBySession(sessionId: String): List<ChatMessageEntity>
+
+    @Query("""
+        SELECT sessionId, COALESCE(group_concat(content, ' '), '') AS content
+        FROM chat_messages
+        WHERE role IN ('user', 'assistant') AND content IS NOT NULL AND content != ''
+        GROUP BY sessionId
+    """)
+    fun observeSessionSearchText(): Flow<List<SessionMessageSearchText>>
 
     @Query("SELECT * FROM chat_messages WHERE id = :id")
     suspend fun getById(id: String): ChatMessageEntity?

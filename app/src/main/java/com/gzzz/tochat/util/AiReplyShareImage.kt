@@ -4,15 +4,18 @@ import android.content.ClipData
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.text.Layout
 import android.text.StaticLayout
 import android.text.TextPaint
 import androidx.core.content.FileProvider
+import com.gzzz.tochat.R
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -100,6 +103,7 @@ object AiReplyShareImage {
         }
 
         val bitmap = Bitmap.createBitmap(IMAGE_WIDTH, imageHeight, Bitmap.Config.ARGB_8888)
+        val appIcon = BitmapFactory.decodeResource(context.resources, R.drawable.ic_launcher)
         try {
             val canvas = Canvas(bitmap)
             drawBackground(canvas, imageHeight)
@@ -107,6 +111,7 @@ object AiReplyShareImage {
                 canvas = canvas,
                 cardWidth = cardWidth,
                 cardHeight = cardHeight,
+                appIcon = appIcon,
                 titlePaint = titlePaint,
                 subtitlePaint = subtitlePaint,
                 labelPaint = labelPaint,
@@ -129,6 +134,7 @@ object AiReplyShareImage {
             return file
         } finally {
             bitmap.recycle()
+            appIcon?.recycle()
         }
     }
 
@@ -143,6 +149,7 @@ object AiReplyShareImage {
         canvas: Canvas,
         cardWidth: Float,
         cardHeight: Float,
+        appIcon: Bitmap?,
         titlePaint: TextPaint,
         subtitlePaint: TextPaint,
         labelPaint: TextPaint,
@@ -165,7 +172,7 @@ object AiReplyShareImage {
 
         var y = cardTop + CARD_PADDING
         val contentLeft = cardLeft + CARD_PADDING
-        drawBrand(canvas, contentLeft, y, titlePaint, subtitlePaint)
+        drawBrand(canvas, contentLeft, y, appIcon, titlePaint, subtitlePaint)
         y += 86f + SECTION_SPACING
 
         if (questionLayout != null) {
@@ -198,11 +205,20 @@ object AiReplyShareImage {
         canvas.restore()
     }
 
-    private fun drawBrand(canvas: Canvas, x: Float, y: Float, titlePaint: TextPaint, subtitlePaint: TextPaint) {
-        val iconPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(45, 124, 212) }
-        canvas.drawRoundRect(RectF(x, y, x + 72f, y + 72f), 20f, 20f, iconPaint)
-        val iconTextPaint = textPaint(42f, Color.WHITE, true).apply { textAlign = Paint.Align.CENTER }
-        canvas.drawText("T", x + 36f, y + 50f, iconTextPaint)
+    private fun drawBrand(canvas: Canvas, x: Float, y: Float, appIcon: Bitmap?, titlePaint: TextPaint, subtitlePaint: TextPaint) {
+        val iconRect = RectF(x, y, x + 72f, y + 72f)
+        if (appIcon != null) {
+            val clipPath = Path().apply { addRoundRect(iconRect, 20f, 20f, Path.Direction.CW) }
+            canvas.save()
+            canvas.clipPath(clipPath)
+            canvas.drawBitmap(appIcon, null, iconRect, Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG))
+            canvas.restore()
+        } else {
+            val iconPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(45, 124, 212) }
+            canvas.drawRoundRect(iconRect, 20f, 20f, iconPaint)
+            val iconTextPaint = textPaint(42f, Color.WHITE, true).apply { textAlign = Paint.Align.CENTER }
+            canvas.drawText("T", x + 36f, y + 50f, iconTextPaint)
+        }
         canvas.drawText("ToChat", x + 94f, y + 36f, titlePaint)
         canvas.drawText("AI 回复分享", x + 94f, y + 72f, subtitlePaint)
     }

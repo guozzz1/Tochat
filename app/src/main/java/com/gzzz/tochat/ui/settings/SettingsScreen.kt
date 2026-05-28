@@ -1,6 +1,9 @@
-﻿package com.gzzz.tochat.ui.settings
+package com.gzzz.tochat.ui.settings
 
+import android.content.Intent
+import android.net.Uri
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -9,6 +12,7 @@ import com.canhub.cropper.CropImageContractOptions
 import com.canhub.cropper.CropImageOptions
 import com.canhub.cropper.CropImageView
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -21,15 +25,22 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -39,6 +50,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -50,21 +62,33 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.launch
 import androidx.hilt.navigation.compose.hiltViewModel
 import coil.compose.rememberAsyncImagePainter
 import com.gzzz.tochat.data.local.ApiConfigEntity
 import com.gzzz.tochat.data.local.KnowledgeDocumentEntity
 import com.gzzz.tochat.data.provider.imageProviderDisplayName
+import com.gzzz.tochat.data.repository.SettingsRepository
 import com.gzzz.tochat.util.ImagePickerUtil
-import kotlinx.serialization.json.Json
+import kotlinx.coroutines.launch
 import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.json.Json
 import java.io.File
+
+private const val SETTINGS_PAGE_HOME = "home"
+private const val SETTINGS_PAGE_APPEARANCE = "appearance"
+private const val SETTINGS_PAGE_CONFIGS = "configs"
+private const val GITHUB_REPOSITORY_URL = "https://github.com/guozzz1/Tochat"
+private const val GITHUB_ISSUES_URL = "https://github.com/guozzz1/Tochat/issues/new"
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -76,11 +100,12 @@ fun SettingsScreen(
     val coroutineScope = rememberCoroutineScope()
     val context = LocalContext.current
 
+    var currentPage by rememberSaveable { mutableStateOf(SETTINGS_PAGE_HOME) }
     var storageInfo by remember { mutableStateOf<com.gzzz.tochat.data.storage.StorageInfo?>(null) }
 
     val backgroundPath by viewModel.backgroundPath.collectAsState()
+    val themeMode by viewModel.themeMode.collectAsState()
 
-    // 裁剪 launcher
     val cropLauncher = rememberLauncherForActivityResult(
         contract = CropImageContract()
     ) { result ->
@@ -99,12 +124,10 @@ fun SettingsScreen(
         }
     }
 
-    // 选择图片 launcher
     val bgPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri ->
         if (uri != null) {
-            // 启动裁剪
             cropLauncher.launch(
                 CropImageContractOptions(
                     uri = uri,
@@ -137,6 +160,9 @@ fun SettingsScreen(
     var showEditDialog by remember { mutableStateOf(false) }
     var editingConfig by remember { mutableStateOf<ApiConfigEntity?>(null) }
     var editingType by remember { mutableStateOf("chat") }
+    var chatConfigsExpanded by rememberSaveable { mutableStateOf(false) }
+    var imageConfigsExpanded by rememberSaveable { mutableStateOf(false) }
+    var knowledgeExpanded by rememberSaveable { mutableStateOf(false) }
 
     if (showEditDialog) {
         ApiConfigEditDialog(
@@ -153,15 +179,30 @@ fun SettingsScreen(
             } ?: emptyList(),
             configType = editingType,
             initialProviderId = editingConfig?.providerId,
+            initialChatProtocol = editingConfig?.chatProtocol ?: "chat_completions",
             onDismiss = {
                 showEditDialog = false
                 editingConfig = null
             },
-            onConfirm = { id, name, baseUrl, apiKey, models, providerId ->
-                viewModel.saveApiConfig(id, name, baseUrl, apiKey, models, editingType, providerId)
-                showEditDialog = false
-                editingConfig = null
-                Toast.makeText(context, "配置已保存", Toast.LENGTH_SHORT).show()
+            onConfirm = { id, name, baseUrl, apiKey, models, providerId, chatPath, chatProtocol ->
+                val saved = viewModel.saveApiConfig(
+                    id = id,
+                    name = name,
+                    baseUrl = baseUrl,
+                    apiKey = apiKey,
+                    models = models,
+                    type = editingType,
+                    providerId = providerId,
+                    chatPath = chatPath,
+                    chatProtocol = chatProtocol
+                )
+                if (saved) {
+                    showEditDialog = false
+                    editingConfig = null
+                    Toast.makeText(context, "配置已保存", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(context, "Base URL 必须以 http:// 或 https:// 开头", Toast.LENGTH_SHORT).show()
+                }
             },
             onRefreshModels = { url, key, callback ->
                 viewModel.fetchModelsForConfig(url, key, callback)
@@ -169,17 +210,34 @@ fun SettingsScreen(
         )
     }
 
-    // 加载存储信息
     LaunchedEffect(Unit) {
         storageInfo = viewModel.getStorageInfo()
+    }
+
+    BackHandler(enabled = currentPage != SETTINGS_PAGE_HOME) {
+        currentPage = SETTINGS_PAGE_HOME
+    }
+
+    val pageTitle = when (currentPage) {
+        SETTINGS_PAGE_APPEARANCE -> "外观"
+        SETTINGS_PAGE_CONFIGS -> "配置管理"
+        else -> "设置"
     }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("设置") },
+                title = { Text(pageTitle) },
                 navigationIcon = {
-                    IconButton(onClick = onNavigateBack) {
+                    IconButton(
+                        onClick = {
+                            if (currentPage == SETTINGS_PAGE_HOME) {
+                                onNavigateBack()
+                            } else {
+                                currentPage = SETTINGS_PAGE_HOME
+                            }
+                        }
+                    ) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "返回")
                     }
                 },
@@ -190,9 +248,7 @@ fun SettingsScreen(
                 )
             )
         },
-        containerColor = if (hasBackground)
-            androidx.compose.ui.graphics.Color.Transparent
-        else MaterialTheme.colorScheme.background
+        containerColor = if (hasBackground) Color.Transparent else MaterialTheme.colorScheme.background
     ) { paddingValues ->
         Column(
             modifier = Modifier
@@ -201,399 +257,526 @@ fun SettingsScreen(
                 .verticalScroll(rememberScrollState())
                 .padding(16.dp)
         ) {
-            // 对话配置（必填）
-            Text(
-                text = "对话配置",
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.primary
-            )
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // 配置列表
-            if (chatConfigs.isEmpty()) {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant
-                    ),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(24.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text(
-                            text = "还没有配置",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = "点击下方按钮添加第一个配置",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
+            when (currentPage) {
+                SETTINGS_PAGE_APPEARANCE -> {
+                    AppearanceSettingsPage(
+                        themeMode = themeMode,
+                        backgroundPath = backgroundPath,
+                        hasBackground = hasBackground,
+                        onThemeModeChange = viewModel::setThemeMode,
+                        onChooseBackground = {
+                            bgPickerLauncher.launch(
+                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                            )
+                        },
+                        onClearBackground = viewModel::clearBackgroundPath
+                    )
                 }
-            } else {
-                chatConfigs.forEach { config ->
-                    ApiConfigCard(
-                        config = config,
-                        onEdit = {
+
+                SETTINGS_PAGE_CONFIGS -> {
+                    ConfigManagementPage(
+                        chatConfigs = chatConfigs,
+                        imageConfigs = imageConfigs,
+                        chatConfigsExpanded = chatConfigsExpanded,
+                        imageConfigsExpanded = imageConfigsExpanded,
+                        hasBackground = hasBackground,
+                        onToggleChatConfigs = { chatConfigsExpanded = !chatConfigsExpanded },
+                        onToggleImageConfigs = { imageConfigsExpanded = !imageConfigsExpanded },
+                        onAddChatConfig = {
+                            chatConfigsExpanded = true
+                            editingConfig = null
+                            editingType = "chat"
+                            showEditDialog = true
+                        },
+                        onAddImageConfig = {
+                            imageConfigsExpanded = true
+                            editingConfig = null
+                            editingType = "image"
+                            showEditDialog = true
+                        },
+                        onEditChatConfig = { config ->
                             editingConfig = config
                             editingType = "chat"
                             showEditDialog = true
                         },
-                        onDelete = {
-                            viewModel.deleteApiConfig(config.id)
-                            Toast.makeText(context, "配置已删除", Toast.LENGTH_SHORT).show()
-                        }
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
-                }
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // 添加配置按钮
-            OutlinedButton(
-                onClick = {
-                    editingConfig = null
-                    editingType = "chat"
-                    showEditDialog = true
-                },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Icon(Icons.Default.Add, contentDescription = null)
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("添加对话配置")
-            }
-
-            Spacer(modifier = Modifier.height(24.dp))
-            Divider()
-            Spacer(modifier = Modifier.height(24.dp))
-
-            // 生图配置
-            Text(
-                text = "生图配置",
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.secondary
-            )
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // 生图配置列表
-            if (imageConfigs.isEmpty()) {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant
-                    ),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(24.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text(
-                            text = "还没有生图配置",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = "点击下方按钮添加生图配置",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            } else {
-                imageConfigs.forEach { config ->
-                    ApiConfigCard(
-                        config = config,
-                        onEdit = {
+                        onEditImageConfig = { config ->
                             editingConfig = config
                             editingType = "image"
                             showEditDialog = true
                         },
-                        onDelete = {
+                        onDeleteConfig = { config ->
                             viewModel.deleteApiConfig(config.id)
                             Toast.makeText(context, "配置已删除", Toast.LENGTH_SHORT).show()
                         }
                     )
-                    Spacer(modifier = Modifier.height(12.dp))
+                }
+
+                else -> {
+                    SettingsHomePage(
+                        chatConfigCount = chatConfigs.size,
+                        imageConfigCount = imageConfigs.size,
+                        knowledgeDocuments = knowledgeDocuments,
+                        knowledgeExpanded = knowledgeExpanded,
+                        isImportingKnowledge = isImportingKnowledge,
+                        storageInfo = storageInfo,
+                        themeMode = themeMode,
+                        hasBackgroundImage = backgroundPath != null,
+                        hasBackground = hasBackground,
+                        onOpenAppearance = { currentPage = SETTINGS_PAGE_APPEARANCE },
+                        onOpenConfigs = { currentPage = SETTINGS_PAGE_CONFIGS },
+                        onToggleKnowledge = { knowledgeExpanded = !knowledgeExpanded },
+                        onImportKnowledge = {
+                            knowledgeExpanded = true
+                            knowledgeFileLauncher.launch(
+                                arrayOf(
+                                    "application/pdf",
+                                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                    "text/plain",
+                                    "text/markdown",
+                                    "text/x-markdown"
+                                )
+                            )
+                        },
+                        onDeleteKnowledgeDocument = { document ->
+                            viewModel.deleteKnowledgeDocument(document.id)
+                            Toast.makeText(context, "知识库文件已删除", Toast.LENGTH_SHORT).show()
+                        },
+                        onClearHistory = {
+                            viewModel.clearAllHistory()
+                            storageInfo = null
+                            Toast.makeText(context, "历史记录已清空", Toast.LENGTH_SHORT).show()
+                        },
+                        onClearImages = {
+                            viewModel.clearAllImages()
+                            coroutineScope.launch {
+                                storageInfo = viewModel.getStorageInfo()
+                            }
+                            Toast.makeText(context, "图片已清理", Toast.LENGTH_SHORT).show()
+                        }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsHomePage(
+    chatConfigCount: Int,
+    imageConfigCount: Int,
+    knowledgeDocuments: List<KnowledgeDocumentEntity>,
+    knowledgeExpanded: Boolean,
+    isImportingKnowledge: Boolean,
+    storageInfo: com.gzzz.tochat.data.storage.StorageInfo?,
+    themeMode: String,
+    hasBackgroundImage: Boolean,
+    hasBackground: Boolean,
+    onOpenAppearance: () -> Unit,
+    onOpenConfigs: () -> Unit,
+    onToggleKnowledge: () -> Unit,
+    onImportKnowledge: () -> Unit,
+    onDeleteKnowledgeDocument: (KnowledgeDocumentEntity) -> Unit,
+    onClearHistory: () -> Unit,
+    onClearImages: () -> Unit
+) {
+    SettingsSectionTitle("功能")
+    SettingsNavigationGroup(hasBackground = hasBackground) {
+        SettingsNavigationRow(
+            icon = Icons.Default.Settings,
+            title = "配置管理",
+            subtitle = "对话配置 · 生图配置",
+            trailingText = "对话 $chatConfigCount · 生图 $imageConfigCount",
+            iconTint = MaterialTheme.colorScheme.primary,
+            onClick = onOpenConfigs
+        )
+        Divider(color = MaterialTheme.colorScheme.outlineVariant)
+        SettingsNavigationRow(
+            icon = Icons.Default.Tune,
+            title = "外观",
+            subtitle = "主题模式 · 聊天背景",
+            trailingText = "${themeModeLabel(themeMode)}${if (hasBackgroundImage) " · 已设置背景" else ""}",
+            iconTint = MaterialTheme.colorScheme.secondary,
+            onClick = onOpenAppearance
+        )
+    }
+
+    Spacer(modifier = Modifier.height(24.dp))
+
+    KnowledgeSettingsSection(
+        documents = knowledgeDocuments,
+        expanded = knowledgeDocuments.isEmpty() || knowledgeExpanded,
+        isImporting = isImportingKnowledge,
+        hasBackground = hasBackground,
+        onToggle = onToggleKnowledge,
+        onImport = onImportKnowledge,
+        onDelete = onDeleteKnowledgeDocument
+    )
+
+    Spacer(modifier = Modifier.height(24.dp))
+    Divider()
+    Spacer(modifier = Modifier.height(24.dp))
+
+    StorageManagementSection(
+        storageInfo = storageInfo,
+        hasBackground = hasBackground,
+        onClearHistory = onClearHistory,
+        onClearImages = onClearImages
+    )
+
+    Spacer(modifier = Modifier.height(24.dp))
+    Divider()
+    Spacer(modifier = Modifier.height(24.dp))
+
+    AboutSection(hasBackground = hasBackground)
+}
+
+@Composable
+private fun ConfigManagementPage(
+    chatConfigs: List<ApiConfigEntity>,
+    imageConfigs: List<ApiConfigEntity>,
+    chatConfigsExpanded: Boolean,
+    imageConfigsExpanded: Boolean,
+    hasBackground: Boolean,
+    onToggleChatConfigs: () -> Unit,
+    onToggleImageConfigs: () -> Unit,
+    onAddChatConfig: () -> Unit,
+    onAddImageConfig: () -> Unit,
+    onEditChatConfig: (ApiConfigEntity) -> Unit,
+    onEditImageConfig: (ApiConfigEntity) -> Unit,
+    onDeleteConfig: (ApiConfigEntity) -> Unit
+) {
+    ConfigSectionHeader(
+        title = "对话配置",
+        count = chatConfigs.size,
+        countText = "已配置 ${chatConfigs.size} 个",
+        expanded = chatConfigs.isEmpty() || chatConfigsExpanded,
+        color = MaterialTheme.colorScheme.primary,
+        onToggle = onToggleChatConfigs
+    )
+
+    Spacer(modifier = Modifier.height(12.dp))
+
+    if (chatConfigs.isEmpty() || chatConfigsExpanded) {
+        if (chatConfigs.isEmpty()) {
+            EmptyStateCard(
+                title = "还没有配置",
+                subtitle = "点击下方按钮添加第一个配置",
+                hasBackground = hasBackground
+            )
+        } else {
+            chatConfigs.forEach { config ->
+                ApiConfigCard(
+                    config = config,
+                    hasBackground = hasBackground,
+                    onEdit = { onEditChatConfig(config) },
+                    onDelete = { onDeleteConfig(config) }
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+            }
+        }
+    }
+
+    Spacer(modifier = Modifier.height(8.dp))
+
+    OutlinedButton(
+        onClick = onAddChatConfig,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Icon(Icons.Default.Add, contentDescription = null)
+        Spacer(modifier = Modifier.width(8.dp))
+        Text("添加对话配置")
+    }
+
+    Spacer(modifier = Modifier.height(24.dp))
+    Divider()
+    Spacer(modifier = Modifier.height(24.dp))
+
+    ConfigSectionHeader(
+        title = "生图配置",
+        count = imageConfigs.size,
+        countText = "已配置 ${imageConfigs.size} 个",
+        expanded = imageConfigs.isEmpty() || imageConfigsExpanded,
+        color = MaterialTheme.colorScheme.secondary,
+        onToggle = onToggleImageConfigs
+    )
+
+    Spacer(modifier = Modifier.height(12.dp))
+
+    if (imageConfigs.isEmpty() || imageConfigsExpanded) {
+        if (imageConfigs.isEmpty()) {
+            EmptyStateCard(
+                title = "还没有生图配置",
+                subtitle = "点击下方按钮添加生图配置",
+                hasBackground = hasBackground
+            )
+        } else {
+            imageConfigs.forEach { config ->
+                ApiConfigCard(
+                    config = config,
+                    hasBackground = hasBackground,
+                    onEdit = { onEditImageConfig(config) },
+                    onDelete = { onDeleteConfig(config) }
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+            }
+        }
+    }
+
+    Spacer(modifier = Modifier.height(8.dp))
+
+    OutlinedButton(
+        onClick = onAddImageConfig,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Icon(Icons.Default.Add, contentDescription = null)
+        Spacer(modifier = Modifier.width(8.dp))
+        Text("添加生图配置")
+    }
+}
+
+@Composable
+private fun AppearanceSettingsPage(
+    themeMode: String,
+    backgroundPath: String?,
+    hasBackground: Boolean,
+    onThemeModeChange: (String) -> Unit,
+    onChooseBackground: () -> Unit,
+    onClearBackground: () -> Unit
+) {
+    SettingsSectionTitle("主题模式")
+
+    SettingsNavigationGroup(hasBackground = hasBackground) {
+        listOf(
+            SettingsRepository.THEME_MODE_SYSTEM to "跟随系统",
+            SettingsRepository.THEME_MODE_LIGHT to "浅色模式",
+            SettingsRepository.THEME_MODE_DARK to "深色模式"
+        ).forEachIndexed { index, (mode, label) ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onThemeModeChange(mode) }
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                RadioButton(
+                    selected = themeMode == mode,
+                    onClick = { onThemeModeChange(mode) }
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            }
+            if (index < 2) {
+                Divider(color = MaterialTheme.colorScheme.outlineVariant)
+            }
+        }
+    }
+
+    Spacer(modifier = Modifier.height(24.dp))
+    Divider()
+    Spacer(modifier = Modifier.height(24.dp))
+
+    SettingsSectionTitle("聊天背景")
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = settingsCardColor(hasBackground)),
+        shape = RoundedCornerShape(8.dp)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (backgroundPath != null) {
+                    Image(
+                        painter = rememberAsyncImagePainter(model = File(backgroundPath)),
+                        contentDescription = "背景预览",
+                        modifier = Modifier
+                            .size(56.dp)
+                            .clip(RoundedCornerShape(8.dp)),
+                        contentScale = ContentScale.Crop
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                }
+
+                OutlinedButton(
+                    onClick = onChooseBackground,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(Icons.Default.Image, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("选择背景")
+                }
+
+                if (backgroundPath != null) {
+                    Spacer(modifier = Modifier.width(8.dp))
+                    OutlinedButton(
+                        onClick = onClearBackground,
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = MaterialTheme.colorScheme.error
+                        )
+                    ) {
+                        Text("恢复默认")
+                    }
                 }
             }
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // 添加生图配置按钮
-            OutlinedButton(
-                onClick = {
-                    editingConfig = null
-                    editingType = "image"
-                    showEditDialog = true
-                },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Icon(Icons.Default.Add, contentDescription = null)
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("添加生图配置")
-            }
-
-            Spacer(modifier = Modifier.height(24.dp))
-            Divider()
-            Spacer(modifier = Modifier.height(24.dp))
-
-            // 本地知识库
             Text(
-                text = "本地知识库",
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.primary
-            )
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            Text(
-                text = "支持 TXT、Markdown、PDF、DOCX，内容仅保存在本机。",
+                text = "选择后可裁剪合适区域，背景会自动调暗。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+        }
+    }
+}
 
-            Spacer(modifier = Modifier.height(12.dp))
+@Composable
+private fun KnowledgeSettingsSection(
+    documents: List<KnowledgeDocumentEntity>,
+    expanded: Boolean,
+    isImporting: Boolean,
+    hasBackground: Boolean,
+    onToggle: () -> Unit,
+    onImport: () -> Unit,
+    onDelete: (KnowledgeDocumentEntity) -> Unit
+) {
+    ConfigSectionHeader(
+        title = "本地知识库",
+        count = documents.size,
+        countText = "已导入 ${documents.size} 个",
+        expanded = expanded,
+        color = MaterialTheme.colorScheme.primary,
+        onToggle = onToggle
+    )
 
-            if (knowledgeDocuments.isEmpty()) {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant
-                    ),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(24.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text(
-                            text = "还没有导入知识库文件",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = "导入文件后，聊天时可以选择作为参考资料",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
+    Spacer(modifier = Modifier.height(12.dp))
+
+    Text(
+        text = "支持 TXT、Markdown、PDF、DOCX，内容仅保存在本机。",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+
+    Spacer(modifier = Modifier.height(12.dp))
+
+    if (expanded) {
+        if (documents.isEmpty()) {
+            EmptyStateCard(
+                title = "还没有导入知识库文件",
+                subtitle = "导入文件后，聊天时可以选择作为参考资料",
+                hasBackground = hasBackground
+            )
+        } else {
+            documents.forEach { document ->
+                KnowledgeDocumentCard(
+                    document = document,
+                    hasBackground = hasBackground,
+                    onDelete = { onDelete(document) }
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+            }
+        }
+    }
+
+    Spacer(modifier = Modifier.height(8.dp))
+
+    OutlinedButton(
+        onClick = onImport,
+        enabled = !isImporting,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Icon(Icons.Default.Add, contentDescription = null)
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(if (isImporting) "导入中..." else "导入知识库文件")
+    }
+}
+
+@Composable
+private fun StorageManagementSection(
+    storageInfo: com.gzzz.tochat.data.storage.StorageInfo?,
+    hasBackground: Boolean,
+    onClearHistory: () -> Unit,
+    onClearImages: () -> Unit
+) {
+    SettingsSectionTitle("存储管理")
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = settingsCardColor(hasBackground)),
+        shape = RoundedCornerShape(8.dp)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            if (storageInfo != null) {
+                StorageInfoRow("图片数量", "${storageInfo.imageCount} 张")
+                StorageInfoRow("图片大小", storageInfo.generationsSizeFormatted)
+                StorageInfoRow("总占用", storageInfo.totalSizeFormatted)
             } else {
-                knowledgeDocuments.forEach { document ->
-                    KnowledgeDocumentCard(
-                        document = document,
-                        onDelete = {
-                            viewModel.deleteKnowledgeDocument(document.id)
-                            Toast.makeText(context, "知识库文件已删除", Toast.LENGTH_SHORT).show()
-                        }
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
-                }
+                Text(
+                    text = "加载中...",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(16.dp))
 
-            OutlinedButton(
-                onClick = {
-                    knowledgeFileLauncher.launch(
-                        arrayOf(
-                            "application/pdf",
-                            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                            "text/plain",
-                            "text/markdown",
-                            "text/x-markdown"
-                        )
-                    )
-                },
-                enabled = !isImportingKnowledge,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Icon(Icons.Default.Add, contentDescription = null)
+            Row {
+                OutlinedButton(
+                    onClick = onClearHistory,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("清空历史记录")
+                }
+
                 Spacer(modifier = Modifier.width(8.dp))
-                Text(if (isImportingKnowledge) "导入中..." else "导入知识库文件")
-            }
 
-            Spacer(modifier = Modifier.height(24.dp))
-            Divider()
-            Spacer(modifier = Modifier.height(24.dp))
-
-            // 聊天背景
-            Text(
-                text = "聊天背景",
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.primary
-            )
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surface
-                ),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        if (backgroundPath != null) {
-                            Image(
-                                painter = rememberAsyncImagePainter(model = File(backgroundPath!!)),
-                                contentDescription = "背景预览",
-                                modifier = Modifier
-                                    .size(56.dp)
-                                    .clip(RoundedCornerShape(8.dp)),
-                                contentScale = ContentScale.Crop
-                            )
-                            Spacer(modifier = Modifier.width(12.dp))
-                        }
-
-                        OutlinedButton(
-                            onClick = {
-                                bgPickerLauncher.launch(
-                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                                )
-                            }
-                        ) {
-                            Text("选择背景")
-                        }
-
-                        Spacer(modifier = Modifier.width(8.dp))
-
-                        if (backgroundPath != null) {
-                            OutlinedButton(
-                                onClick = { viewModel.clearBackgroundPath() },
-                                colors = ButtonDefaults.outlinedButtonColors(
-                                    contentColor = MaterialTheme.colorScheme.error
-                                )
-                            ) {
-                                Text("恢复默认")
-                            }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    Text(
-                        text = "选择后可裁剪合适区域，背景会自动调暗",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                OutlinedButton(
+                    onClick = onClearImages,
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error
                     )
+                ) {
+                    Text("清理图片")
                 }
             }
+        }
+    }
+}
 
-            Spacer(modifier = Modifier.height(24.dp))
-            Divider()
-            Spacer(modifier = Modifier.height(24.dp))
+@Composable
+private fun AboutSection(hasBackground: Boolean) {
+    val context = LocalContext.current
 
-            // 存储管理
-            Text(
-                text = "存储管理",
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.primary
-            )
+    SettingsSectionTitle("关于")
 
-            Spacer(modifier = Modifier.height(12.dp))
-
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surface
-                ),
-                shape = RoundedCornerShape(12.dp)
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = settingsCardColor(hasBackground)),
+        shape = RoundedCornerShape(8.dp)
+    ) {
+        Column {
+            Row(
+                modifier = Modifier.padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    if (storageInfo != null) {
-                        val info = storageInfo!!
-                        StorageInfoRow("图片数量", "${info.imageCount} 张")
-                        StorageInfoRow("图片大小", info.generationsSizeFormatted)
-                        StorageInfoRow("总占用", info.totalSizeFormatted)
-                    } else {
-                        Text(
-                            text = "加载中...",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    Row {
-                        OutlinedButton(
-                            onClick = {
-                                viewModel.clearAllHistory()
-                                storageInfo = null
-                                Toast.makeText(context, "历史记录已清空", Toast.LENGTH_SHORT).show()
-                            },
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Text("清空历史记录")
-                        }
-
-                        Spacer(modifier = Modifier.width(8.dp))
-
-                        OutlinedButton(
-                            onClick = {
-                                viewModel.clearAllImages()
-                                coroutineScope.launch {
-                                    storageInfo = viewModel.getStorageInfo()
-                                }
-                                Toast.makeText(context, "图片已清理", Toast.LENGTH_SHORT).show()
-                            },
-                            modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.outlinedButtonColors(
-                                contentColor = MaterialTheme.colorScheme.error
-                            )
-                        ) {
-                            Text("清理图片")
-                        }
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(24.dp))
-            Divider()
-            Spacer(modifier = Modifier.height(24.dp))
-
-            // 关于
-            Text(
-                text = "关于",
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.primary
-            )
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surface
-                ),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
+                Icon(
+                    Icons.Default.Info,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+                Spacer(modifier = Modifier.width(12.dp))
+                Column {
                     Text(
                         text = "ToChat v1.0.0",
-                        style = MaterialTheme.typography.bodyLarge
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
@@ -603,6 +786,141 @@ fun SettingsScreen(
                     )
                 }
             }
+            Divider(color = MaterialTheme.colorScheme.outlineVariant)
+            SettingsNavigationRow(
+                icon = Icons.Default.Code,
+                title = "GitHub",
+                trailingText = "guozzz1/Tochat",
+                iconTint = MaterialTheme.colorScheme.onSurface,
+                onClick = { openExternalUrl(context, GITHUB_REPOSITORY_URL) }
+            )
+            Divider(color = MaterialTheme.colorScheme.outlineVariant)
+            SettingsNavigationRow(
+                icon = Icons.Default.BugReport,
+                title = "报告问题",
+                iconTint = MaterialTheme.colorScheme.error,
+                onClick = { openExternalUrl(context, GITHUB_ISSUES_URL) }
+            )
+        }
+    }
+}
+
+@Composable
+private fun SettingsNavigationGroup(
+    hasBackground: Boolean,
+    content: @Composable () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = settingsCardColor(hasBackground)),
+        shape = RoundedCornerShape(8.dp)
+    ) {
+        Column {
+            content()
+        }
+    }
+}
+
+@Composable
+private fun SettingsNavigationRow(
+    icon: ImageVector,
+    title: String,
+    subtitle: String? = null,
+    trailingText: String? = null,
+    iconTint: Color,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 18.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = iconTint,
+            modifier = Modifier.size(32.dp)
+        )
+        Spacer(modifier = Modifier.width(16.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            if (!subtitle.isNullOrBlank()) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        if (!trailingText.isNullOrBlank()) {
+            Text(
+                text = trailingText,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+        }
+        Icon(
+            Icons.Default.KeyboardArrowRight,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+private fun openExternalUrl(context: android.content.Context, url: String) {
+    try {
+        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+    } catch (e: Exception) {
+        Toast.makeText(context, "无法打开链接: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+    }
+}
+
+@Composable
+private fun SettingsSectionTitle(title: String) {
+    Text(
+        text = title,
+        style = MaterialTheme.typography.titleMedium,
+        color = MaterialTheme.colorScheme.primary
+    )
+    Spacer(modifier = Modifier.height(12.dp))
+}
+
+@Composable
+private fun EmptyStateCard(
+    title: String,
+    subtitle: String,
+    hasBackground: Boolean
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = settingsMutedCardColor(hasBackground)),
+        shape = RoundedCornerShape(8.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }
@@ -631,14 +949,13 @@ private fun StorageInfoRow(label: String, value: String) {
 @Composable
 private fun KnowledgeDocumentCard(
     document: KnowledgeDocumentEntity,
+    hasBackground: Boolean,
     onDelete: () -> Unit
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface
-        ),
-        shape = RoundedCornerShape(12.dp)
+        colors = CardDefaults.cardColors(containerColor = settingsCardColor(hasBackground)),
+        shape = RoundedCornerShape(8.dp)
     ) {
         Row(
             modifier = Modifier
@@ -693,17 +1010,64 @@ private fun KnowledgeDocumentCard(
 }
 
 @Composable
+private fun ConfigSectionHeader(
+    title: String,
+    count: Int,
+    countText: String,
+    expanded: Boolean,
+    color: Color,
+    onToggle: () -> Unit
+) {
+    val actionText = if (expanded) "收起$title" else "展开$title"
+    val canToggle = count > 0
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(enabled = canToggle, onClick = onToggle)
+            .padding(vertical = 4.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+                color = color
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = countText,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
+        IconButton(
+            onClick = onToggle,
+            enabled = canToggle
+        ) {
+            Icon(
+                imageVector = if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                contentDescription = actionText,
+                tint = if (canToggle) color else MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@Composable
 private fun ApiConfigCard(
     config: ApiConfigEntity,
+    hasBackground: Boolean,
     onEdit: () -> Unit,
     onDelete: () -> Unit
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface
-        ),
-        shape = RoundedCornerShape(12.dp)
+        colors = CardDefaults.cardColors(containerColor = settingsCardColor(hasBackground)),
+        shape = RoundedCornerShape(8.dp)
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(
@@ -756,6 +1120,13 @@ private fun ApiConfigCard(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.secondary
                 )
+            } else {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "接口格式：${if (config.chatProtocol == "responses") "OpenAI Responses" else "OpenAI Chat Completions"}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
 
             if (models.isNotEmpty()) {
@@ -767,5 +1138,31 @@ private fun ApiConfigCard(
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun settingsCardColor(hasBackground: Boolean): Color {
+    return if (hasBackground) {
+        MaterialTheme.colorScheme.surface.copy(alpha = 0.88f)
+    } else {
+        MaterialTheme.colorScheme.surface
+    }
+}
+
+@Composable
+private fun settingsMutedCardColor(hasBackground: Boolean): Color {
+    return if (hasBackground) {
+        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.82f)
+    } else {
+        MaterialTheme.colorScheme.surfaceVariant
+    }
+}
+
+private fun themeModeLabel(mode: String): String {
+    return when (mode) {
+        SettingsRepository.THEME_MODE_LIGHT -> "浅色"
+        SettingsRepository.THEME_MODE_DARK -> "深色"
+        else -> "跟随系统"
     }
 }

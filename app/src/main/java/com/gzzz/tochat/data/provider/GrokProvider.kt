@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
@@ -54,6 +55,12 @@ class GrokProvider @Inject constructor(
 
     override fun configure(image: ServiceConfig, chat: ServiceConfig) {
         this.apiKey = image.apiKey
+        val baseUrl = normalizedHttpBaseUrl(image.baseUrl)
+        if (baseUrl == null) {
+            apiService = null
+            return
+        }
+
         val json = Json { ignoreUnknownKeys = true }
         val client = OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
@@ -65,7 +72,7 @@ class GrokProvider @Inject constructor(
             .build()
 
         val retrofit = Retrofit.Builder()
-            .baseUrl(image.baseUrl.trimEnd('/') + "/")
+            .baseUrl(baseUrl)
             .client(client)
             .addConverterFactory("application/json".toMediaType().let { json.asConverterFactory(it) })
             .build()
@@ -289,5 +296,13 @@ class GrokProvider @Inject constructor(
         } catch (e: Exception) {
             null
         }
+    }
+
+    private fun normalizedHttpBaseUrl(url: String): String? {
+        val normalized = url.trim().trimEnd('/') + "/"
+        val httpUrl = normalized.toHttpUrlOrNull() ?: return null
+        if (httpUrl.scheme != "http" && httpUrl.scheme != "https") return null
+        if (httpUrl.host.isBlank()) return null
+        return normalized
     }
 }

@@ -33,6 +33,9 @@ class SettingsRepository @Inject constructor(
     )
     val backgroundPath: StateFlow<String?> = _backgroundPath.asStateFlow()
 
+    private val _themeMode = MutableStateFlow(prefs.getString(KEY_THEME_MODE, THEME_MODE_SYSTEM) ?: THEME_MODE_SYSTEM)
+    val themeMode: StateFlow<String> = _themeMode.asStateFlow()
+
     private val _knowledgeEnabled = MutableStateFlow(prefs.getBoolean("knowledge_enabled", false))
     val knowledgeEnabled: StateFlow<Boolean> = _knowledgeEnabled.asStateFlow()
 
@@ -48,6 +51,15 @@ class SettingsRepository @Inject constructor(
             prefs.edit().remove("chat_background_path").apply()
         }
         _backgroundPath.value = path
+    }
+
+    fun setThemeMode(mode: String) {
+        val normalizedMode = when (mode) {
+            THEME_MODE_LIGHT, THEME_MODE_DARK -> mode
+            else -> THEME_MODE_SYSTEM
+        }
+        prefs.edit().putString(KEY_THEME_MODE, normalizedMode).apply()
+        _themeMode.value = normalizedMode
     }
 
     fun setKnowledgeEnabled(enabled: Boolean) {
@@ -223,5 +235,12 @@ class SettingsRepository @Inject constructor(
         val configId = prefs.getString("current_image_config_id", null)
         val model = prefs.getString("current_image_model", null)
         return configId to model
+    }
+
+    companion object {
+        const val THEME_MODE_SYSTEM = "system"
+        const val THEME_MODE_LIGHT = "light"
+        const val THEME_MODE_DARK = "dark"
+        private const val KEY_THEME_MODE = "theme_mode"
     }
 }

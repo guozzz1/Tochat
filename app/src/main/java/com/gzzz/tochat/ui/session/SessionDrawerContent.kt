@@ -48,6 +48,7 @@ import java.util.Locale
 @Composable
 fun SessionDrawerContent(
     sessions: List<ChatSessionEntity>,
+    sessionSearchText: Map<String, String>,
     currentSessionId: String?,
     onSessionClick: (String) -> Unit,
     onNewSession: () -> Unit,
@@ -59,8 +60,15 @@ fun SessionDrawerContent(
     var renamingSession by remember { mutableStateOf<ChatSessionEntity?>(null) }
     var renameText by remember { mutableStateOf("") }
 
-    val filteredSessions = if (searchQuery.isBlank()) sessions
-    else sessions.filter { it.title.contains(searchQuery, ignoreCase = true) }
+    val trimmedQuery = searchQuery.trim()
+    val filteredSessions = if (trimmedQuery.isBlank()) {
+        sessions
+    } else {
+        sessions.filter { session ->
+            session.title.contains(trimmedQuery, ignoreCase = true) ||
+                sessionSearchText[session.id].orEmpty().contains(trimmedQuery, ignoreCase = true)
+        }
+    }
 
     renamingSession?.let { session ->
         val trimmedTitle = renameText.trim()
@@ -226,9 +234,13 @@ private fun SessionItem(
             )
             Spacer(modifier = Modifier.height(2.dp))
             Text(
-                text = formatTime(session.updatedAt),
+                text = if (session.parentSessionId != null) "分支 · ${formatTime(session.updatedAt)}" else formatTime(session.updatedAt),
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = if (session.parentSessionId != null) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                }
             )
         }
 

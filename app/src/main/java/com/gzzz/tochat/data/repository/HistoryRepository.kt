@@ -1,7 +1,10 @@
 ﻿package com.gzzz.tochat.data.repository
 
+import androidx.room.withTransaction
+import com.gzzz.tochat.data.local.AppDatabase
 import com.gzzz.tochat.data.local.ChatMessageDao
 import com.gzzz.tochat.data.local.ChatMessageEntity
+import com.gzzz.tochat.data.local.SessionMessageSearchText
 import com.gzzz.tochat.data.local.ChatSessionDao
 import com.gzzz.tochat.data.local.ChatSessionEntity
 import kotlinx.coroutines.flow.Flow
@@ -11,12 +14,15 @@ import javax.inject.Singleton
 
 @Singleton
 class HistoryRepository @Inject constructor(
+    private val db: AppDatabase,
     private val sessionDao: ChatSessionDao,
     private val messageDao: ChatMessageDao
 ) {
     // --- Sessions ---
 
     fun observeSessions(): Flow<List<ChatSessionEntity>> = sessionDao.observeAll()
+
+    fun observeSessionSearchText(): Flow<List<SessionMessageSearchText>> = messageDao.observeSessionSearchText()
 
     fun searchSessions(query: String): Flow<List<ChatSessionEntity>> = sessionDao.search(query)
 
@@ -39,6 +45,50 @@ class HistoryRepository @Inject constructor(
         )
         sessionDao.insert(session)
         return session
+    }
+
+    suspend fun createBranchFromMessage(messageId: String): ChatSessionEntity? = db.withTransaction {
+        val branchPoint = messageDao.getById(messageId) ?: return@withTransaction null
+        if (branchPoint.role != "assistant" || branchPoint.messageType != "text" || branchPoint.status != "success") {
+            return@withTransaction null
+        }
+
+        val sourceSession = sessionDao.getById(branchPoint.sessionId) ?: return@withTransaction null
+        val sourceMessages = messageDao.getBySession(sourceSession.id)
+        val branchPointIndex = sourceMessages.indexOfFirst { it.id == messageId }
+        if (branchPointIndex == -1) return@withTransaction null
+
+        val now = System.currentTimeMillis()
+        val messagesToCopy = sourceMessages.take(branchPointIndex + 1)
+        val branchSessionId = UUID.randomUUID().toString()
+        val branchTitle = "分支：${sourceSession.title}"
+        val branchThumbnailPath = messagesToCopy
+            .asReversed()
+            .firstNotNullOfOrNull { it.thumbnailPath ?: it.imageResultPath }
+
+        val branchSession = ChatSessionEntity(
+            id = branchSessionId,
+            title = branchTitle.take(30) + if (branchTitle.length > 30) "..." else "",
+            createdAt = now,
+            updatedAt = now,
+            providerId = sourceSession.providerId,
+            model = sourceSession.model,
+            thumbnailPath = branchThumbnailPath,
+            parentSessionId = sourceSession.id,
+            branchedFromMessageId = branchPoint.id,
+            branchedAt = now
+        )
+
+        val copiedMessages = messagesToCopy.map { message ->
+            message.copy(
+                id = UUID.randomUUID().toString(),
+                sessionId = branchSessionId
+            )
+        }
+
+        sessionDao.insert(branchSession)
+        messageDao.insertAll(copiedMessages)
+        branchSession
     }
 
     suspend fun updateSession(session: ChatSessionEntity) {
